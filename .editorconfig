@@ -1,0 +1,12 @@
+
+[*.{c,c++,cc,config,cp,cpp,cu,cxx,h,hh,hpp,hxx,inc,inl]
+indent_style=space
+indent_size=4
+tab_width=4
+
+[*]
+
+# Standard properties
+end_of_line=lf
+insert_final_newline=true
+max_line_length=120

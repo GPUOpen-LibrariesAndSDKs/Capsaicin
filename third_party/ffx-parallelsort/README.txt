@@ -1,0 +1,1 @@
+This is a modified version of ffx-parallelsort v1.1.1 that includes support for descending sorting

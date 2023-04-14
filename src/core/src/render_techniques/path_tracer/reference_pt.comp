@@ -1,0 +1,634 @@
+/**********************************************************************
+Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "reference_pt_shared.h"
+
+uint2 g_BufferDimensions;
+RayCamera g_RayCamera;
+uint g_BounceCount;
+uint g_BounceRRCount;
+uint g_SampleCount;
+uint g_Accumulate;
+
+uint g_FrameIndex;
+
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<Mesh> g_MeshBuffer;
+StructuredBuffer<float4x4> g_TransformBuffer;
+StructuredBuffer<uint> g_IndexBuffer;
+StructuredBuffer<Vertex> g_VertexBuffer;
+StructuredBuffer<Material> g_MaterialBuffer;
+
+RWTexture2D<float4> g_AccumulationBuffer;
+RWTexture2D<float4> g_OutputBuffer;
+
+RaytracingAccelerationStructure g_Scene;
+
+TextureCube g_EnvironmentBuffer;
+Texture2D g_TextureMaps[] : register(space99);
+
+SamplerState g_TextureSampler; // Should be a linear sampler
+
+#include "../../components/light_sampler_bounds/light_sampler_bounds.hlsl"
+#include "../../components/stratified_sampler/stratified_sampler.hlsl"
+#include "../../materials/material_sampling.hlsl"
+#include "../../math/random.hlsl"
+
+typedef RayQuery< RAY_FLAG_NONE /*| RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES*/> //RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES seems to cause the driver to crash
+ClosestRayQuery;
+
+typedef RayQuery< RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES| RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH >
+ShadowRayQuery;
+
+/** Data representing a surface intersection */
+struct IntersectData
+{
+    Material material; /**< The material associated with intersected surface */
+    float2 uv; /**< The texture UV values at intersected position */
+    float3 vertex0; /**< The surface triangles first vertex */
+    float3 vertex1; /**< The surface triangles second vertex */
+    float3 vertex2; /**< The surface triangles third vertex */
+    float2 uv0; /**< The uv coordinate at the first vertex */
+    float2 uv1; /**< The uv coordinate at the second vertex */
+    float2 uv2; /**< The uv coordinate at the third vertex */
+    float3 position; /**< The ray intersection location */
+    float3 normal; /**< The shading normal at position */
+    float3 geometryNormal; /**< The normal of actual intersected triangle at position */
+    float2 barycentrics; /**< The barycentric coordinates within the intersected primitive */
+};
+
+/**
+ * Determine a transformation matrix to correctly transform normal vectors.
+ * @param transform The original transform matrix.
+ * @return The new transform matrix.
+ */
+float3x3 getNormalTransform(float4x4 transform)
+{
+    // The transform for a normal is transpose(inverse(M))
+    // The inverse is calculated as [1/det(A)]*transpose(C) where C is the cofactor matrix
+    // This simplifies down to [1/det(A)]*C
+    float3x3 input = (float3x3)transform;
+    float3x3 result;
+    result._m00 = determinant(float2x2(input._m11_m12, input._m21_m22));
+    result._m01 = -determinant(float2x2(input._m10_m12, input._m20_m22));
+    result._m02 = determinant(float2x2(input._m10_m11, input._m20_m21));
+    result._m10 = -determinant(float2x2(input._m01_m02, input._m21_m22));
+    result._m11 = determinant(float2x2(input._m00_m02, input._m20_m22));
+    result._m12 = -determinant(float2x2(input._m00_m01, input._m20_m21));
+    result._m20 = determinant(float2x2(input._m01_m02, input._m11_m12));
+    result._m21 = -determinant(float2x2(input._m00_m02, input._m10_m12));
+    result._m22 = determinant(float2x2(input._m00_m01, input._m10_m11));
+#undef minor
+    float3 det3 = input._m00_m01_m02 * result._m00_m01_m02;
+    float det = det3.x + det3.y + det3.z;
+    det = 1.0f / det;
+    return (result * det);
+}
+
+/**
+ * Determine the intersection data for a ray hit.
+ * @param instanceIndex  The index of the object instance that was intersected (instances into g_InstanceBuffer).
+ * @param primitiveIndex The index of the intersected primitive within the instance.
+ * @param barycentrics   The barycentric coordinates within the intersected primitive.
+ * @param frontFace      True if the intersection was on the front face of the primitive.
+ * @return The data associated with the intersection.
+ */
+IntersectData MakeIntersectData(uint instanceIndex, uint primitiveIndex, float2 barycentrics, bool frontFace)
+{
+    // Get instance information for current object
+    Instance instance = g_InstanceBuffer[instanceIndex];
+    Mesh mesh = g_MeshBuffer[instance.mesh_index];
+    float4x4 transform = g_TransformBuffer[instance.transform_index];
+    float3x3 normalTransform = getNormalTransform(transform);
+
+    // Get index buffer values
+    uint i0 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 0] + mesh.vertex_offset / mesh.vertex_stride;
+    uint i1 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 1] + mesh.vertex_offset / mesh.vertex_stride;
+    uint i2 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 2] + mesh.vertex_offset / mesh.vertex_stride;
+
+    // Get vertex values from buffers
+    float3 v0 = g_VertexBuffer[i0].position.xyz;
+    float3 v1 = g_VertexBuffer[i1].position.xyz;
+    float3 v2 = g_VertexBuffer[i2].position.xyz;
+
+    // Get normal values from buffers
+    float3 n0 = g_VertexBuffer[i0].normal.xyz;
+    float3 n1 = g_VertexBuffer[i1].normal.xyz;
+    float3 n2 = g_VertexBuffer[i2].normal.xyz;
+    float3 normal = interpolate(n0, n1, n2, barycentrics);
+
+    // Get UV values from buffers
+    float2 uv0 = g_VertexBuffer[i0].uv;
+    float2 uv1 = g_VertexBuffer[i1].uv;
+    float2 uv2 = g_VertexBuffer[i2].uv;
+
+    IntersectData iData;
+    // Set material
+    iData.material = g_MaterialBuffer[mesh.material_index];
+    // Calculate UV coordinates
+    iData.uv = interpolate(uv0, uv1, uv2, barycentrics);
+    // Add vertex information needed for lights
+    iData.vertex0 = mul(transform, float4(v0, 1.0f)).xyz;
+    iData.vertex1 = mul(transform, float4(v1, 1.0f)).xyz;
+    iData.vertex2 = mul(transform, float4(v2, 1.0f)).xyz;
+    iData.uv0 = uv0;
+    iData.uv1 = uv1;
+    iData.uv2 = uv2;
+    // Calculate intersection position
+    iData.position = interpolate(iData.vertex0, iData.vertex1, iData.vertex2, barycentrics);
+    // Calculate shading normal
+    iData.normal = normalize(mul(normalTransform, normal * (frontFace ? 1.0f : -1.0f)));
+    // Check for normal mapping
+    uint normalTex = asuint(iData.material.normal_ao.x);
+    if (normalTex != uint(-1))
+    {
+        // Get normal from texture map
+        float3 normalTan = 2.0f * g_TextureMaps[NonUniformResourceIndex(normalTex)].SampleLevel(g_TextureSampler, iData.uv, 0.0f).xyz - 1.0f;
+
+        // Calculate tangent and bi-tangent basis vectors
+        float3 edge1 = v1 - v0;
+        float3 edge2 = v2 - v0;
+        normal = normalize(normal) * (frontFace ? 1.0f : -1.0f);
+        float2 edgeUV1 = uv1 - uv0;
+        float2 edgeUV2 = uv2 - uv0;
+        float r = 1.0f / (edgeUV1.x * edgeUV2.y - edgeUV1.y * edgeUV2.x);
+        float3 tangent = (edge1 * edgeUV2.yyy - edge2 * edgeUV1.yyy) * r;
+        float3 bitangent = (edge2 * edgeUV1.xxx - edge1 * edgeUV2.xxx) * r;
+
+        // Calculate handedness
+        float handedness = dot(cross(normal, tangent), bitangent) < 0.0f ? 1.0f : -1.0f; // Inverted due to left handed system
+
+        // Gram-Schmidt orthogonalise tangent
+        tangent = normalize(tangent - normal * dot(normal, tangent));
+        bitangent = normalize(cross(normal, tangent) * handedness);
+
+        // Convert from tangent space
+        float3x3 tbn = transpose(float3x3(tangent, bitangent, normal)); //HLSL matrices are row-major so need to be transposed
+        iData.normal = normalize(mul(normalTransform, mul(tbn, normalTan)));
+    }
+    // Calculate geometry normal (assume CCW winding)
+    float3 edge10 = v1 - v0;
+    float3 edge20 = v2 - v0;
+    iData.geometryNormal = normalize(mul(normalTransform, cross(edge10, edge20) * (frontFace ? 1.0f : -1.0f)));
+    iData.barycentrics = barycentrics;
+    return iData;
+}
+
+/** Data representing only valid material data for  surface intersection. */
+struct IntersectDataMaterial
+{
+    Material material; /**< The material associated with intersected surface */
+    float2 uv; /**< The texture UV values at intersected position */
+};
+
+/**
+ * Determine the material specific intersection data for a ray hit.
+ * @param instanceIndex  The index of the object instance that was intersected (instances into g_InstanceBuffer).
+ * @param primitiveIndex The index of the intersected primitive within the instance.
+ * @param barycentrics   The barycentric coordinates within the intersected primitive.
+ * @return The data associated with the intersection.
+ */
+IntersectDataMaterial MakeIntersectDataMaterial(uint instanceIndex, uint primitiveIndex, float2 barycentrics)
+{
+    // Get instance information for current object
+    Instance instance = g_InstanceBuffer[instanceIndex];
+    Mesh mesh = g_MeshBuffer[instance.mesh_index];
+
+    // Get index buffer values
+    uint i0 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 0] + mesh.vertex_offset / mesh.vertex_stride;
+    uint i1 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 1] + mesh.vertex_offset / mesh.vertex_stride;
+    uint i2 = g_IndexBuffer[mesh.index_offset / mesh.index_stride + 3 * primitiveIndex + 2] + mesh.vertex_offset / mesh.vertex_stride;
+
+    // Get UV values from buffers
+    float2 uv0 = g_VertexBuffer[i0].uv;
+    float2 uv1 = g_VertexBuffer[i1].uv;
+    float2 uv2 = g_VertexBuffer[i2].uv;
+
+    IntersectDataMaterial iData;
+    // Set material
+    iData.material = g_MaterialBuffer[mesh.material_index];
+    // Calculate UV coordinates
+    iData.uv = interpolate(uv0, uv1, uv2, barycentrics);
+    return iData;
+}
+
+/**
+ * Balanced heuristic used in MIS weight calculation.
+ * @param fPDF The PDF of the sampled value.
+ * @param gPDF The PDF of the MIS weighting value.
+ * @return The calculated weight.
+ */
+float balanceHeuristic(float fPDF, float gPDF)
+{
+    return fPDF / (fPDF + gPDF);
+}
+
+/**
+ * Power heuristic used in MIS weight calculation.
+ * @param fPDF The PDF of the sampled value.
+ * @param gPDF The PDF of the MIS weighting value.
+ * @return The calculated weight.
+ */
+float powerHeuristic(float fPDF, float gPDF)
+{
+    return (fPDF * fPDF) / (fPDF * fPDF + gPDF * gPDF);
+}
+
+/**
+ * Heuristic used in MIS weight calculation.
+ * @param fPDF The PDF of the sampled value.
+ * @param gPDF The PDF of the MIS weighting value.
+ * @return The calculated weight.
+ */
+float heuristicMIS(float fPDF, float gPDF)
+{
+    return balanceHeuristic(fPDF, gPDF);
+    //return powerHeuristic(fPDF, gPDF);
+}
+
+/**
+ * Calculates radiance from a new light ray direction from a surface by sampling the scenes lighting.
+ * @tparam RNG The type of random number sampler to be used.
+ * @param material         Material data describing BRDF of surface.
+ * @param randomStratified Random number sampler used to sample light.
+ * @param randomNG         Random number sampler used to sample alpha.
+ * @param position         Current position on surface.
+ * @param normal           Shading normal vector at current position.
+ * @param viewDirection    Outgoing ray view direction.
+ * @param rayShadowQuery   Existing object used to test visibility of shadow rays.
+ * @return The radiance returned from sampled light direction.
+ */
+float3 sampleLightsNEE(MaterialBRDF material, inout StratifiedSampler randomStratified, inout Random randomNG, float3 position, float3 normal,
+    float3 viewDirection, ShadowRayQuery rayShadowQuery)
+{
+    float lightPDF;
+    uint lightIndex = sampleLights(randomNG, position, normal, lightPDF);
+    randomNG.rngState = randomNG.rand() * 4294967295.0f; //Scrambling to compensate for dxc crash with inout params above
+
+    if (lightPDF == 0.0f)
+    {
+        return 0.0f.xxx;
+    }
+
+    // Initialise returned radiance
+    float3 lightPosition;
+    float3 lightDirection;
+    float sampledLightPDF;
+    float2 unused;
+    Light selectedLight = getLight(lightIndex);
+    float3 radianceLi = sampleLight(selectedLight, randomStratified, position, normal, lightDirection, sampledLightPDF, lightPosition, unused);
+
+    // Combine PDFs
+    lightPDF *= sampledLightPDF;
+
+    // Early discard lights behind surface
+    if (dot(lightDirection, normal) < 0.0f || lightPDF == 0.0f)
+    {
+        return 0.0f.xxx;
+    }
+
+    // Check if light is not occluded
+    RayDesc ray;
+    ray.Origin = position;
+    ray.Direction = lightDirection;
+    ray.TMin = 0.0f;
+    ray.TMax = hasLightPosition(selectedLight) ? length(lightPosition - position) : FLT_MAX;
+    rayShadowQuery.TraceRayInline(g_Scene, RAY_FLAG_NONE, 0xFFu, ray);
+
+    // Check for non-opaque geometry
+    while (rayShadowQuery.Proceed())
+    {
+        if (rayShadowQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+        {
+            // Get the intersection data
+            uint instanceIndex = rayShadowQuery.CandidateInstanceIndex();
+            uint primitiveIndex = rayShadowQuery.CandidatePrimitiveIndex();
+            float2 uv = rayShadowQuery.CandidateTriangleBarycentrics();
+            IntersectDataMaterial iData = MakeIntersectDataMaterial(instanceIndex, primitiveIndex, uv);
+
+            // Check the alpha mask/blend
+            MaterialAlpha materialMask = MakeMaterialAlpha(iData.material, iData.uv);
+            // Perform alpha stochastic check
+            if (materialMask.alpha >= 0.5f)
+            {
+                rayShadowQuery.CommitNonOpaqueTriangleHit();
+            }
+        }
+        else
+        {
+            // Should never get here as we don't support non-triangle geometry
+            // However if this conditional is removed the driver crashes
+            rayShadowQuery.Abort();
+        }
+    }
+
+    // If nothing was hit then we have hit the light
+    if (rayShadowQuery.CommittedStatus() == COMMITTED_NOTHING)
+    {
+        // Evaluate BRDF for new light direction and calculate combined PDF for current sample
+        float3 sampleReflectance;
+        float samplePDF = sampleBRDFPDFAndEvalute(material, normal, viewDirection, lightDirection, sampleReflectance);
+
+        // Add lighting contribution
+        bool deltaLight = isDeltaLight(selectedLight);
+        float weight = (!deltaLight) ? heuristicMIS(lightPDF, samplePDF) : 1.0f;
+        return sampleReflectance * radianceLi * (weight / lightPDF).xxx;
+    }
+
+    return 0.0f.xxx;
+}
+
+/**
+ * Generate a primary ray originating from the camera for a given pixel.
+ * @param pixel Requested pixel (pixel center is at 0.5 +-0.5)
+ * @return The generated ray.
+ */
+RayDesc generateCameraRay(float2 pixel)
+{
+    // Setup the ray
+    RayDesc ray;
+
+    // Get direction from origin to current pixel in screen plane
+    float3 direction =
+        (pixel.x * g_RayCamera.directionX) +
+        (pixel.y * g_RayCamera.directionY) +
+            g_RayCamera.directionTL;
+
+    // Set the ray origin
+    ray.Origin = g_RayCamera.origin;
+
+    // Compute the ray direction for this pixel
+    ray.Direction = normalize(direction);
+
+    // Get adjusted range values
+    ray.TMin = g_RayCamera.range.x;
+    ray.TMax = g_RayCamera.range.y;
+
+    return ray;
+}
+
+/**
+ * Calculate illumination information for a specific pixel
+ * @note This writes a single sample per pixel directly to the output buffer
+ * @param pixel      The current pixel.
+ * @param dimensions The maximum pixel dimensions.
+ */
+void pathTracer(in uint2 pixel, in uint2 dimensions)
+{
+    // Setup configurable constants
+    const uint minBounces = g_BounceRRCount; //Minimum bounces before early terminations are allowed
+    const uint maxBounces = g_BounceCount;
+    const uint maxSamples = g_SampleCount;
+
+    //Check if valid pixel
+    if (any(pixel >= dimensions))
+    {
+        return;
+    }
+
+    // Intialise random number sampler
+    const uint id = pixel.x + pixel.y * dimensions.x;
+    Random randomNG = MakeRandom(id, g_FrameIndex);
+
+    // Offset pixel to pixel center
+    float2 pixelRay = pixel;
+    pixelRay += 0.5f;
+
+    // Initialise per-pixel path tracing values
+    float3 radiance = 0.0f.xxx;
+
+    // Initialise shader ray local ray query
+    ClosestRayQuery rayQuery;
+    ShadowRayQuery rayShadowQuery;
+
+    // The PDF of the last sampled BRDF
+    float samplePDF = 1.0f;
+
+    // Loop over requested number of samples per pixel
+    for (uint sample = 0; sample < maxSamples; ++sample)
+    {
+        // Calculate jittered pixel position
+        StratifiedSampler randomStratified = MakeStratifiedSampler(id, g_FrameIndex * maxSamples + sample);
+        float2 newPixelRay = pixelRay + lerp(-0.5.xx, 0.5.xx, randomStratified.rand2());
+
+        // Calculate primary ray
+        RayDesc ray = generateCameraRay(newPixelRay);
+
+        // Initialise per-sample path tracing values
+        float3 throughput = 1.0f.xxx;
+
+        for (uint bounce = 0; bounce <= maxBounces; ++bounce)
+        {
+            // Trace the ray through the scene
+            rayQuery.TraceRayInline(g_Scene, RAY_FLAG_NONE, 0xFFu, ray);
+
+            while (rayQuery.Proceed())
+            {
+                if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+                {
+                    // Get the intersection data
+                    uint instanceIndex = rayQuery.CandidateInstanceIndex();
+                    uint primitiveIndex = rayQuery.CandidatePrimitiveIndex();
+                    float2 uv = rayQuery.CandidateTriangleBarycentrics();
+                    IntersectDataMaterial iData = MakeIntersectDataMaterial(instanceIndex, primitiveIndex, uv);
+
+                    // Check for alpha masking
+                    MaterialAlpha materialMask = MakeMaterialAlpha(iData.material, iData.uv);
+                    // Perform alpha stochastic check
+                    if (materialMask.alpha >= 0.5f)
+                    {
+                        rayQuery.CommitNonOpaqueTriangleHit();
+                    }
+                }
+                else
+                {
+                    // Should never get here as we don't support non-triangle geometry
+                    // However if this conditional is removed the driver crashes
+                    rayQuery.Abort();
+                }
+            }
+
+            // Check for valid intersection
+            if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
+            {
+#ifdef DISABLE_DIRECT_LIGHTING
+                if (bounce == 1) break;
+#endif
+                if (hasEnvironmentLight())
+                {
+                    // If nothing was hit then load the environment map
+                    LightEnvironment light = getEnvironmentLight();
+                    float3 lightRadiance = evaluateEnvironmentLight(light, ray.Direction);
+                    if (bounce != 0)
+                    {
+                        // Account for light contribution along sampled direction
+                        float lightPDF = sampleEnvironmentLightPDF(light, ray.Direction, float3(0.0f.xxx));
+                        lightPDF *= sampleLightPDF(ray.Origin);
+
+                        // Add lighting contribution
+                        float weight = heuristicMIS(samplePDF, lightPDF);
+                        radiance += throughput * lightRadiance * weight.xxx;
+                    }
+                    else
+                    {
+                        radiance += throughput * lightRadiance;
+                    }
+                }
+                break;
+            }
+
+            // Get the intersection data
+            uint instanceIndex = rayQuery.CommittedInstanceIndex();
+            uint primitiveIndex = rayQuery.CommittedPrimitiveIndex();
+            float2 barycentrics = rayQuery.CommittedTriangleBarycentrics();
+            bool frontFace = rayQuery.CommittedTriangleFrontFace();
+            IntersectData iData = MakeIntersectData(instanceIndex, primitiveIndex, barycentrics, frontFace);
+
+            // Get material BSDF values
+            MaterialBSDF materialBSDF = MakeMaterialBSDF(iData.material, iData.uv);
+
+#ifdef DISABLE_DIRECT_LIGHTING
+            if (bounce == 1) {/*ignore emissive hit*/} else
+#endif
+            if (frontFace && any(materialBSDF.emissive > 0.0f))
+            {
+                // Get light contribution
+                float3 lightRadiance = materialBSDF.emissive;
+#ifndef DISABLE_AREA_LIGHTS
+                if (bounce != 0)
+                {
+                    // Get material properties at intersection
+                    LightArea emissiveLight = MakeLightArea(iData.vertex0, iData.vertex1, iData.vertex2,
+                        // The following parameters are irrelevant for calculating PDF
+                        0.0f.xxxx, 0.0f, 0.0f, 0.0f);
+
+                    // Account for light contribution along sampled direction
+                    float lightPDF = sampleAreaLightPDF(emissiveLight, ray.Origin, iData.position);
+                    lightPDF *= sampleLightPDF(ray.Origin);
+
+                    // Add lighting contribution
+                    float weight = heuristicMIS(samplePDF, lightPDF);
+                    lightRadiance *= weight.xxx;
+                }
+#endif
+                radiance += throughput * lightRadiance;
+            }
+
+            // Terminate early if no more bounces
+            if (bounce == maxBounces)
+            {
+                break;
+            }
+
+            float3 viewDirection = -ray.Direction;
+
+            // Offset the intersection position to prevent self intersection on generated rays
+            float3 offsetOrigin = offsetPosition(iData.position, iData.geometryNormal);
+
+#ifdef DISABLE_ALBEDO_MATERIAL
+            // Disable material albedo if requested
+            if (bounce == 0)
+            {
+                materialBSDF.albedo = 0.3f.xxx;
+#ifndef DISABLE_SPECULAR_LIGHTING
+                materialBSDF.F0 = 0.0f.xxx;
+#endif
+            }
+#endif
+
+#ifdef DISABLE_DIRECT_LIGHTING
+            // Disable direct lighting if requested
+            if (bounce > 0)
+#endif
+            {
+                // Sample a single light
+                radiance += throughput * sampleLightsNEE(MakeMaterialBRDF(materialBSDF), randomStratified, randomNG, offsetOrigin, iData.normal, viewDirection, rayShadowQuery);
+            }
+
+            // Sample BRDF to get next ray direction
+            float3 sampleReflectance;
+            float3 rayDirection = sampleBRDF(MakeMaterialBRDF(materialBSDF), randomStratified, iData.normal, viewDirection, sampleReflectance, samplePDF);
+
+            // Prevent tracing directions below the surface
+            if (dot(iData.geometryNormal, rayDirection) <= 0.0f)
+            {
+                break;
+            }
+
+            // Add sampling weight to current weight
+            throughput *= sampleReflectance / samplePDF.xxx;
+
+            // Stop if no further contribution
+            if (luminance(throughput) <= (1.0f / 1024.0f))
+            {
+                break;
+            }
+
+            // Russian Roulette early termination
+            if (bounce > minBounces)
+            {
+                float rrSample = hmax(throughput);
+                if (rrSample <= randomNG.rand())
+                {
+                    break;
+                }
+                throughput /= rrSample.xxx;
+            }
+
+            // Create new ray
+            ray.Origin = offsetOrigin;
+            ray.Direction = rayDirection;
+            ray.TMin = 0.0f;
+            ray.TMax = FLT_MAX;
+        }
+    }
+
+    // Accumulate previous samples
+    if (g_Accumulate != 0)
+    {
+        // Get previous values
+        float4 accumulator = g_AccumulationBuffer[pixel];
+        // Calculate running average
+        float3 runningAverage = accumulator.xyz * accumulator.www + radiance;
+        // Increment sample count
+        float sampleCount = accumulator.w + maxSamples;
+        radiance = runningAverage / sampleCount.xxx;
+        // Write out new radiance and sample count to accumulation buffer
+        g_AccumulationBuffer[pixel] = float4(radiance, sampleCount);
+    }
+    else
+    {
+        // Write out current value so its ready for next frame
+        g_AccumulationBuffer[pixel] = float4(radiance, maxSamples);
+        // Average out radiance so its ready for final output
+        radiance /= maxSamples;
+    }
+
+    // Output average accumulation
+    g_OutputBuffer[pixel] = float4(radiance, 1.0f);
+}
+
+[numthreads(4, 8, 1)]
+void ReferencePT(in uint2 did : SV_DispatchThreadID)
+{
+    pathTracer(did, g_BufferDimensions);
+}

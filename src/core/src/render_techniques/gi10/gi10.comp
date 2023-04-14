@@ -1,0 +1,2386 @@
+/**********************************************************************
+Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "gi10_shared.h"
+
+//!
+//! GI-1.0 shader bindings.
+//!
+
+float3 g_Eye;
+float2 g_NearFar;
+uint   g_GroupSize;
+uint   g_FrameIndex;
+float4 g_InvDeviceZ;
+float3 g_PreviousEye;
+int2   g_BlurDirection;
+uint2  g_BufferDimensions;
+uint   g_UseDirectLighting;
+float3 g_PreViewTranslation;
+
+Texture2D g_DepthBuffer;
+Texture2D g_NormalBuffer;
+Texture2D g_DetailsBuffer;
+Texture2D g_VelocityBuffer;
+Texture2D g_OcclusionAndBentNormalBuffer;
+Texture2D g_NearFieldGlobalIlluminationBuffer;
+Texture2D g_VisibilityBuffer;
+Texture2D g_PreviousDepthBuffer;
+Texture2D g_PreviousNormalBuffer;
+Texture2D g_PreviousDetailsBuffer;
+
+StructuredBuffer<uint> g_CountBuffer;
+
+ByteAddressBuffer g_IndexBuffers[]  : register(space1);
+ByteAddressBuffer g_VertexBuffers[] : register(space2);
+
+StructuredBuffer<Mesh>     g_MeshBuffer;
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<Material> g_MaterialBuffer;
+StructuredBuffer<float4>   g_TransformBuffer;
+
+RWTexture2D<float4>                 g_IrradianceBuffer;
+RWStructuredBuffer<uint4>           g_DrawCommandBuffer;
+RWStructuredBuffer<DispatchCommand> g_DispatchCommandBuffer;
+RWTexture2D<float4>                 g_GlobalIlluminationBuffer;
+Texture2D                           g_PrevCombinedIlluminationBuffer;
+
+RaytracingAccelerationStructure g_Scene;
+
+TextureCube g_EnvironmentBuffer;
+Texture2D   g_TextureMaps[] : register(space99);
+
+SamplerState g_NearestSampler;
+SamplerState g_TextureSampler; // Is a linear sampler
+
+ConstantBuffer<GI10Constants>              g_GI10Constants;
+ConstantBuffer<ScreenProbesConstants>      g_ScreenProbesConstants;
+ConstantBuffer<HashGridCacheConstants>     g_HashGridCacheConstants;
+ConstantBuffer<WorldSpaceReSTIRConstants>  g_WorldSpaceReSTIRConstants;
+
+#define g_ViewProjection                g_GI10Constants.view_proj
+#define g_PreviousViewProjection        g_GI10Constants.view_proj_prev
+#define g_ViewProjectionInverse         g_GI10Constants.view_proj_inv
+#define g_PreviousViewProjectionInverse g_GI10Constants.view_proj_inv_prev
+#define g_Reprojection                  g_GI10Constants.reprojection
+
+//!
+//! GI-1.0 shader includes.
+//!
+
+#include "../../components/light_sampler_bounds/light_sampler_bounds.hlsl"
+#include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"
+#include "../../components/stratified_sampler/stratified_sampler.hlsl"
+#include "../../lights/lights.hlsl"
+#include "../../materials/materials.hlsl"
+#include "../../materials/material_sampling.hlsl"
+#include "../../math/color.hlsl"
+#include "../../math/geometry.hlsl"
+#include "../../math/hash.hlsl"
+#include "../../math/spherical_harmonics.hlsl"
+#include "../../mesh.hlsl"
+#include "../../math/pack.hlsl"
+
+#include "gi10.hlsl"
+#include "screen_probes.hlsl"
+#include "hash_grid_cache.hlsl"
+#include "world_space_restir.hlsl"
+#include "gi_denoiser.hlsl"
+
+#ifdef USE_ALPHA_TESTING
+typedef RayQuery<RAY_FLAG_NONE /*| RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES*/>   // TODO: RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES seems to cause the driver to crash
+ClosestRayQuery;
+
+typedef RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+ShadowRayQuery;
+
+template<typename RayQueryType>
+RayQueryType TraceRay(RayDesc ray_desc)
+{
+    RayQueryType ray_query;
+    ray_query.TraceRayInline(g_Scene, RAY_FLAG_NONE, 0xFFu, ray_desc);
+    while (ray_query.Proceed())
+    {
+        if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+        {
+            // Get the intersection data
+            uint   instanceIndex  = ray_query.CandidateInstanceIndex();
+            uint   geometryIndex  = ray_query.CandidateGeometryIndex();
+            uint   primitiveIndex = ray_query.CandidatePrimitiveIndex();
+            float2 barycentrics   = ray_query.CandidateTriangleBarycentrics();
+
+            // Get instance information for current object
+            Instance instance = g_InstanceBuffer[instanceIndex];
+            Mesh mesh         = g_MeshBuffer[instance.mesh_index + geometryIndex];
+
+            // Get UV values from buffers
+            Vertex v0, v1, v2;
+            FetchVertices(mesh, primitiveIndex, v0, v1, v2);
+
+            // Set material
+            Material material = g_MaterialBuffer[mesh.material_index];
+            // Calculate UV coordinates
+            float2 uv = interpolate(v0.uv, v1.uv, v2.uv, barycentrics);
+            MaterialAlpha mask = MakeMaterialAlpha(material, uv);
+
+            // Check the alpha mask
+            // Approximates alpha blending
+            if (mask.alpha >= 0.5f)
+            {
+                ray_query.CommitNonOpaqueTriangleHit();
+            }
+        }
+        else
+        {
+            // Should never get here as we don't support non-triangle geometry
+            // However if this conditional is removed the driver crashes
+            ray_query.Abort();
+        }
+    }
+
+    return ray_query;
+}
+#else // USE_ALPHA_TESTING
+typedef RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>
+ClosestRayQuery;
+
+typedef RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+ShadowRayQuery;
+
+template<typename RayQueryType>
+RayQueryType TraceRay(RayDesc ray_desc)
+{
+    RayQueryType ray_query;
+    ray_query.TraceRayInline(g_Scene, RAY_FLAG_NONE, 0xFFu, ray_desc);
+    while (ray_query.Proceed()) {}
+
+    return ray_query;
+}
+#endif // USE_ALPHA_TESTING
+
+//!
+//! GI-1.0 kernels.
+//!
+
+[numthreads(1, 1, 1)]
+void ClearCounters()
+{
+    g_Reservoir_HashListCountBuffer[0] = 0; // reset counters
+
+    g_ScreenProbes_EmptyTileCountBuffer[0]                  = 0;
+    g_ScreenProbes_OverrideTileCountBuffer[0]               = 0;
+    g_ScreenProbes_ProbeCachedTileLRUCountBuffer[0]         = 0;
+    g_ScreenProbes_ProbeCachedTileMRUCountBuffer[0]         = 0;
+    g_ScreenProbes_ProbeCachedTileListElementCountBuffer[0] = 0;
+
+    g_HashGridCache_PackedTileCountBuffer[0]    = 0;
+    g_HashGridCache_UpdateTileCountBuffer[0]    = 0;
+    g_HashGridCache_VisibilityCountBuffer[0]    = 0;
+    g_HashGridCache_VisibilityRayCountBuffer[0] = 0;
+}
+
+[numthreads(1, 1, 1)]
+void GenerateDraw()
+{
+    uint num_cells_per_tile_mip_debug[4] = {
+        g_HashGridCacheConstants.num_cells_per_tile_mip0,
+        g_HashGridCacheConstants.num_cells_per_tile_mip1,
+        g_HashGridCacheConstants.num_cells_per_tile_mip2,
+        g_HashGridCacheConstants.num_cells_per_tile_mip3
+    };
+
+    // If propagate is true, we display smaller cells with bigger cells values
+    uint debug_mip_level = g_HashGridCacheConstants.debug_propagate != 0 ? 0 : g_HashGridCacheConstants.debug_mip_level;
+
+    uint4 draw_command;
+    draw_command.x = 6 * num_cells_per_tile_mip_debug[debug_mip_level] * g_HashGridCache_PackedTileCountBuffer[0];
+    draw_command.y = 1;
+    draw_command.z = 0;
+    draw_command.w = 0;
+    g_DrawCommandBuffer[0] = draw_command;
+}
+
+[numthreads(1, 1, 1)]
+void GenerateDispatch()
+{
+    DispatchCommand dispatch_command;
+    dispatch_command.num_groups_x = (g_CountBuffer[0] + g_GroupSize - 1) / g_GroupSize;
+    dispatch_command.num_groups_y = 1;
+    dispatch_command.num_groups_z = 1;
+    dispatch_command.padding = 0;
+    g_DispatchCommandBuffer[0] = dispatch_command;
+}
+
+//!
+//! Screen probes kernels.
+//!
+
+[numthreads(8, 8, 1)]
+void ClearProbeMask(in uint2 did : SV_DispatchThreadID)
+{
+    g_ScreenProbes_ProbeMaskBuffer[did] = kGI10_InvalidId;
+}
+
+[numthreads(8, 8, 1)]
+void FilterProbeMask(in uint2 did : SV_DispatchThreadID)
+{
+    uint2 dims;
+    g_ScreenProbes_InProbeMaskBuffer.GetDimensions(dims.x, dims.y);
+
+    if (any((did << 1) >= dims))
+    {
+        return; // out of bounds
+    }
+
+    uint probe_mask = kGI10_InvalidId;
+
+    // Here, we look for a valid probe in the 2x2 region from the upper mip in
+    // order to populate the lower mips with as many valid probes as possible.
+    for (uint y = 0; y < 2; ++y)
+    {
+        for (uint x = 0; x < 2; ++x)
+        {
+            uint2 pos = (did << 1) + uint2(x, y);
+
+            probe_mask = (all(pos < dims) ? g_ScreenProbes_InProbeMaskBuffer[pos] : kGI10_InvalidId);
+
+            if (probe_mask != kGI10_InvalidId)
+            {
+                break;
+            }
+        }
+
+        if (probe_mask != kGI10_InvalidId)
+        {
+            break;
+        }
+    }
+
+    g_ScreenProbes_OutProbeMaskBuffer[did] = probe_mask;
+}
+
+[numthreads(64, 1, 1)]
+void InitCachedTileLRU(in uint did : SV_DispatchThreadID)
+{
+    g_ScreenProbes_ProbeCachedTileLRUBuffer[did] = (did | 0x80000000u);
+}
+
+[numthreads(8, 8, 1)]
+void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id : SV_GroupID, in uint2 local_id : SV_GroupThreadID, in uint local_index : SV_GroupIndex)
+{
+    float  depth        = g_DepthBuffer.Load(int3(did, 0)).x;
+    float3 normal       = (all(did < g_BufferDimensions) ? g_NormalBuffer.Load(int3(did, 0)).xyz : float3(0.0f, 0.0f, 0.0f));
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    normal = normalize(2.0f * normal - 1.0f);   // decode normal
+
+    float2 uv         = (did + 0.5f) / g_BufferDimensions;
+    float3 world_pos  = InverseProject(g_ViewProjectionInverse, uv, depth);
+    float  cell_size  = distance(g_Eye, world_pos) * g_ScreenProbesConstants.cell_size;
+    uint   probe_size = g_ScreenProbesConstants.probe_size;
+
+    uint2 cell          = (local_id % probe_size);
+    uint  cell_index    = cell.x + cell.y * probe_size;
+    uint2 probe_block   = (local_id / probe_size);
+    uint  probe_segment = probe_block.x + (probe_block.y << 1);
+
+    if (cell_index == 0)
+    {
+        lds_ScreenProbes_Reprojection[probe_segment] = ((f32tof16(65504.0f) << 16) | 0xFFFFu);
+    }
+
+    lds_ScreenProbes_RadianceValues[(local_index << 2) + 0] = 0;
+    lds_ScreenProbes_RadianceValues[(local_index << 2) + 1] = 0;
+    lds_ScreenProbes_RadianceValues[(local_index << 2) + 2] = 0;
+    lds_ScreenProbes_RadianceValues[(local_index << 2) + 3] = 0;
+    lds_ScreenProbes_RadianceSampleCounts[local_index] = 0;
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Try and find the closest matching probe in the previous frame.
+    // Each probe is assigned a score and we atomically pick the best candidate
+    // out of all the 8x8, i.e., 64, potential positions.
+    if (!is_sky_pixel)
+    {
+        float2 velocity     = g_VelocityBuffer.Load(int3(did, 0)).xy;
+        float2 previous_uv  = uv - velocity;
+        int2   previous_pos = int2(previous_uv * g_BufferDimensions);
+
+        if (all(previous_pos >= 0) && all(previous_pos < int2(g_BufferDimensions)))
+        {
+            uint probe_mask = g_ScreenProbes_PreviousProbeMaskBuffer[previous_pos / probe_size];
+
+            if (probe_mask != kGI10_InvalidId)
+            {
+                float2 probe_uv     = (ScreenProbes_UnpackSeed(probe_mask) + 0.5f) / g_BufferDimensions;
+                float  probe_depth  = g_PreviousDepthBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).x;
+                float3 probe_normal = normalize(2.0f * g_PreviousNormalBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).xyz - 1.0f);
+                float3 probe_pos    = InverseProject(g_PreviousViewProjectionInverse, probe_uv, probe_depth);
+
+                if (abs(dot(probe_pos - world_pos, normal)) < cell_size && dot(normal, probe_normal) > 0.95f)
+                {
+                    uint probe_score = ((f32tof16(distance(probe_pos, world_pos) / cell_size) << 16) | local_index);
+
+                    InterlockedMin(lds_ScreenProbes_Reprojection[probe_segment], probe_score);
+                }
+            }
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Now we map each lane to a cell in the probe and re-use the radiance values temporally
+    uint  local_lane = (lds_ScreenProbes_Reprojection[probe_segment] & 0xFFFFu);
+    uint2 seed       = (group_id << 3) + uint2(local_lane & 7, local_lane >> 3);
+
+    uv = (seed + 0.5f) / g_BufferDimensions;    // center on seed
+
+    float2 velocity     = g_VelocityBuffer.Load(int3(seed, 0)).xy;
+    float2 previous_uv  = uv - velocity;
+    uint2  previous_pos = uint2(previous_uv * g_BufferDimensions);
+
+    uint probe_mask = g_ScreenProbes_PreviousProbeMaskBuffer[previous_pos / probe_size];
+
+    if (local_lane != 0xFFFFu)
+    {
+        depth     = g_DepthBuffer.Load(int3(seed, 0)).x;
+        normal    = normalize(2.0f * g_NormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+        world_pos = InverseProject(g_ViewProjectionInverse, uv, depth);
+
+        float2 probe_uv    = (ScreenProbes_UnpackSeed(probe_mask) + 0.5f) / g_BufferDimensions;
+        float  probe_depth = g_PreviousDepthBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).x;
+        float3 probe_pos   = InverseProject(g_PreviousViewProjectionInverse, probe_uv, probe_depth);
+
+        float3 probe_normal    = normalize(2.0f * g_PreviousNormalBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).xyz - 1.0f);
+        float4 probe_radiance  = g_ScreenProbes_PreviousProbeBuffer[((ScreenProbes_UnpackSeed(probe_mask) / g_ScreenProbesConstants.probe_size) * g_ScreenProbesConstants.probe_size) + cell];
+        float3 probe_direction = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+
+        float3 b1, b2;
+        GetOrthoVectors(probe_normal, b1, b2);
+        probe_direction = probe_direction.x * b1 + probe_direction.y * b2 + probe_direction.z * probe_normal;
+
+        float3 hit_point       = probe_pos + probe_direction * probe_radiance.w;
+        float3 reprojected_dir = hit_point - world_pos;
+        float  reprojected_len = length(reprojected_dir);
+
+        reprojected_dir /= reprojected_len; // normalize
+
+        if (dot(normal, reprojected_dir) > 0.0f)
+        {
+            float2 remap_uv         = 0.5f * float32x3_to_hemioct(mul(reprojected_dir, CreateTBN(normal))) + 0.5f;
+            uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
+            uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+            uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(probe_radiance.xyz, reprojected_len));
+
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 1], remap_radiance.y);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 2], remap_radiance.z);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 3], remap_radiance.w);
+            InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[remap_cell_index], 1);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Calculate the radiance backup value to be used for unvisited cells
+    lds_ScreenProbes_RadianceBackup[local_index] = float4(ScreenProbes_RecoverRadiance(uint3(lds_ScreenProbes_RadianceValues[(local_index << 2) + 0],
+                                                                                             lds_ScreenProbes_RadianceValues[(local_index << 2) + 1],
+                                                                                             lds_ScreenProbes_RadianceValues[(local_index << 2) + 2])),
+                                                                                             lds_ScreenProbes_RadianceSampleCounts[local_index] > 0.0f ? 1.0f : 0.0f);
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint stride = 1; stride < 64; stride <<= 1)
+    {
+        if (local_index < 64 / (2 * stride))
+            lds_ScreenProbes_RadianceBackup[2 * (local_index + 1) * stride - 1] += lds_ScreenProbes_RadianceBackup[(2 * local_index + 1) * stride - 1];
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (local_index == 0)
+    {
+        float4 total_radiance   = lds_ScreenProbes_RadianceBackup[64 - 1];
+        float3 radiance         = total_radiance.xyz / max(total_radiance.w, 1.0f);
+        float  empty_cell_count = (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size - total_radiance.w);
+
+        lds_ScreenProbes_RadianceBackup[0] = float4(radiance / max(empty_cell_count, 1.0f), 1e9f);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // No probe found, this is a disocclusion
+    if (local_lane == 0xFFFFu)
+    {
+        if (cell_index == 0)
+        {
+            uint2 probe  = (did / probe_size);
+
+            if (!is_sky_pixel)
+            {
+                uint2 jitter = min(CalculateHaltonSequence(g_FrameIndex) * g_ScreenProbesConstants.probe_spawn_tile_size, g_ScreenProbesConstants.probe_spawn_tile_size - 1.0f);
+
+                // Check whether this disoccluded tile won't be filled during the probe spawning pass.
+                // If it won't be spawned, we append it to the list of "empty tiles" so the ray distribution can
+                // get re-balanced to achieve adaptive sampling.
+                if (any((jitter / probe_size) != (probe % (g_ScreenProbesConstants.probe_spawn_tile_size / probe_size))))
+                {
+                    uint empty_tile_index;
+                    InterlockedAdd(g_ScreenProbes_EmptyTileCountBuffer[0], 1, empty_tile_index);
+
+                    uint probe_count = (g_BufferDimensions.x + probe_size - 1) / probe_size;
+                    uint probe_index = (probe.x + probe.y * probe_count);
+
+                    g_ScreenProbes_EmptyTileBuffer[empty_tile_index] = probe_index;
+                }
+            }
+
+            g_ScreenProbes_ProbeMaskBuffer[probe] = kGI10_InvalidId;
+        }
+
+        return; // reprojection failed :'(
+    }
+
+    // Reproject the spherical harmonics
+    if (cell_index < 9)
+    {
+        uint2 probe          = (did / probe_size);
+        uint2 previous_probe = (ScreenProbes_UnpackSeed(probe_mask) / probe_size);
+
+        uint probe_count          = (g_BufferDimensions.x + probe_size - 1) / probe_size;
+        uint probe_index          = (probe.x + probe.y * probe_count);
+        uint previous_probe_index = (previous_probe.x + previous_probe.y * probe_count);
+
+        if (cell_index == 0)
+        {
+            g_ScreenProbes_ProbeMaskBuffer[probe] = ScreenProbes_PackSeed(seed);
+        }
+
+        g_ScreenProbes_ProbeSHBuffer[9 * probe_index + cell_index] = g_ScreenProbes_PreviousProbeSHBuffer[9 * previous_probe_index + cell_index];
+    }
+
+    // And reproject the radiance
+    float4 radiance = ScreenProbes_RecoverRadiance(uint4(lds_ScreenProbes_RadianceValues[(local_index << 2) + 0],
+                                                         lds_ScreenProbes_RadianceValues[(local_index << 2) + 1],
+                                                         lds_ScreenProbes_RadianceValues[(local_index << 2) + 2],
+                                                         lds_ScreenProbes_RadianceValues[(local_index << 2) + 3]));
+
+    uint sample_count = lds_ScreenProbes_RadianceSampleCounts[local_index];
+
+    if (sample_count > 0)
+    {
+        radiance /= sample_count;
+    }
+    else
+    {
+        radiance = lds_ScreenProbes_RadianceBackup[0];
+    }
+
+    g_ScreenProbes_ProbeBuffer[did] = radiance;
+}
+
+[numthreads(64, 1, 1)]
+void CountScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint2 dims;
+    g_ScreenProbes_ProbeCachedTileIndexBuffer.GetDimensions(dims.x, dims.y);
+
+    if (did >= (dims.x * dims.y))
+    {
+        return; // out of bounds
+    }
+
+    uint cached_tile_index = g_ScreenProbes_ProbeCachedTileLRUBuffer[did];
+
+    if (!((cached_tile_index & 0x80000000u) != 0))
+    {
+        uint2 cached_probe = uint2(cached_tile_index % dims.x, cached_tile_index / dims.x);
+
+        float3 world_pos   = g_ScreenProbes_ProbeCachedTileIndexBuffer[cached_probe].xyz;
+        float4 homogeneous = mul(g_ViewProjection, float4(world_pos, 1.0f));
+
+        homogeneous.xyz /= homogeneous.w;    // perspective divide
+        homogeneous.xy   = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
+
+        if (all(homogeneous.xyz > 0.0f) && all(homogeneous.xyz < 1.0f))
+        {
+            uint2 probe_count = (g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
+            uint2 probe       = uint2(homogeneous.xy * probe_count);
+            uint  probe_index = (probe.x + probe.y * probe_count.x);
+
+            uint element_index;
+            InterlockedAdd(g_ScreenProbes_ProbeCachedTileListElementCountBuffer[0], 1, element_index);
+
+            uint index_in_tile;
+            InterlockedAdd(g_ScreenProbes_ProbeCachedTileListCountBuffer[probe_index], 1, index_in_tile);
+
+            g_ScreenProbes_ProbeCachedTileListElementBuffer[element_index] = uint4(did, probe_index, index_in_tile, 0);
+        }
+    }
+
+    g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[did] = 1;
+}
+
+[numthreads(64, 1, 1)]
+void ScatterScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_ScreenProbes_ProbeCachedTileListElementCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    uint3 list_element  = g_ScreenProbes_ProbeCachedTileListElementBuffer[did].xyz;
+    uint  scatter_index = g_ScreenProbes_ProbeCachedTileListIndexBuffer[list_element.y] + list_element.z;
+
+    g_ScreenProbes_ProbeCachedTileListBuffer[scatter_index] = list_element.x;
+}
+
+[numthreads(64, 1, 1)]
+void SpawnScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_width  = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_height = (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+
+    if (did >= max_probe_spawn_width * max_probe_spawn_height)
+    {
+        return; // out of bounds
+    }
+
+    uint2 probe  = uint2(did % max_probe_spawn_width, did / max_probe_spawn_width);
+    uint2 jitter = min(CalculateHaltonSequence(g_FrameIndex) * g_ScreenProbesConstants.probe_spawn_tile_size, g_ScreenProbesConstants.probe_spawn_tile_size - 1.0f);
+    uint2 seed   = min(probe * g_ScreenProbesConstants.probe_spawn_tile_size + jitter, g_BufferDimensions - 1);
+
+    float3 normal       = g_NormalBuffer.Load(int3(seed, 0)).xyz;
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    if (!is_sky_pixel)
+    {
+        g_ScreenProbes_PreviousProbeSpawnBuffer[did] = ScreenProbes_PackSeed(seed);
+    }
+
+    g_ScreenProbes_ProbeSpawnScanBuffer[did] = (!is_sky_pixel ? 1 : 0);
+}
+
+[numthreads(64, 1, 1)]
+void CompactScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_width  = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_height = (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+
+    if (did >= max_probe_spawn_width * max_probe_spawn_height)
+    {
+        return; // out of bounds
+    }
+
+    if (g_ScreenProbes_ProbeSpawnScanBuffer[did] == 0)
+    {
+        return; // probe was culled
+    }
+
+    uint probe_index = g_ScreenProbes_ProbeSpawnIndexBuffer[did];
+    uint probe_seed  = g_ScreenProbes_PreviousProbeSpawnBuffer[did];
+    uint probe_mask  = g_ScreenProbes_ProbeMaskBuffer[ScreenProbes_UnpackSeed(probe_seed) / g_ScreenProbesConstants.probe_size];
+
+    // If we're not filling a hole from the reprojection, we can append this tile to the
+    // list of "overridable tile"; that is, this is a valid candidate to be un-spawned in
+    // favor of a disoccluded "empty tile" during the patching of the probes.
+    if (probe_mask != uint(-1))
+    {
+        uint override_tile_index;
+        InterlockedAdd(g_ScreenProbes_OverrideTileCountBuffer[0], 1, override_tile_index);
+
+        g_ScreenProbes_OverrideTileBuffer[override_tile_index] = probe_index;
+    }
+
+    g_ScreenProbes_ProbeSpawnBuffer[probe_index] = probe_seed;
+}
+
+[numthreads(64, 1, 1)]
+void PatchScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint override_tile_count = g_ScreenProbes_OverrideTileCountBuffer[0];
+
+    if (override_tile_count == 0 || did >= g_ScreenProbes_EmptyTileCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    uint probe_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
+    uint probe_index = g_ScreenProbes_EmptyTileBuffer[did];
+
+    uint2 probe  = uint2(probe_index % probe_count, probe_index / probe_count);
+    uint2 jitter = min(CalculateHaltonSequence(g_FrameIndex) * g_ScreenProbesConstants.probe_size, g_ScreenProbesConstants.probe_size - 1.0f);
+
+    uint2  seed         = min(probe * g_ScreenProbesConstants.probe_size + jitter, g_BufferDimensions - 1);
+    float3 normal       = g_NormalBuffer.Load(int3(seed, 0)).xyz;
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    if (is_sky_pixel)
+    {
+        return; // sky pixel
+    }
+
+    Random random = MakeRandom(did, g_FrameIndex);
+    uint index = random.randInt(override_tile_count);
+
+    InterlockedExchange(g_ScreenProbes_ProbeSpawnBuffer[index], ScreenProbes_PackSeed(seed), index);
+}
+
+[numthreads(64, 1, 1)]
+void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint  cell_index           = cell_and_probe_index.x;
+    uint  probe_index          = cell_and_probe_index.y;
+
+    uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    uint2 seed  = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
+    uint2 probe = (seed / g_ScreenProbesConstants.probe_size);
+    uint2 pos   = (probe * g_ScreenProbesConstants.probe_size) + cell;
+
+    float2 uv        = (seed + 0.5f) / g_BufferDimensions;
+    float  depth     = g_DepthBuffer.Load(int3(seed, 0)).x;
+    float3 normal    = normalize(2.0f * g_NormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+    float3 world_pos = InverseProject(g_ViewProjectionInverse, uv, depth);
+
+    uint  previous_probe_mask = kGI10_InvalidId;
+    float cell_size           = distance(g_Eye, world_pos) * g_ScreenProbesConstants.cell_size;
+    int2  probe_res           = int2((g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size);
+
+    uint2 dims;
+    g_ScreenProbes_ProbeCachedTileIndexBuffer.GetDimensions(dims.x, dims.y);
+
+    if (local_id == 0)
+    {
+        lds_ScreenProbes_RadianceReuseSampleCount = 0;
+    }
+
+    lds_ScreenProbes_RadianceValues[(local_id << 2) + 0] = 0;
+    lds_ScreenProbes_RadianceValues[(local_id << 2) + 1] = 0;
+    lds_ScreenProbes_RadianceValues[(local_id << 2) + 2] = 0;
+    lds_ScreenProbes_RadianceValues[(local_id << 2) + 3] = 0;
+    lds_ScreenProbes_RadianceSampleCounts[local_id] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    if (probe_index < probe_count)
+    {
+        const int kRadius = 1;
+
+        for (int y = -kRadius; y <= kRadius; ++y)
+        {
+            for (int x = -kRadius; x <= kRadius; ++x)
+            {
+                int2 tap = int2(probe) + int2(x, y);
+
+                if (any(tap < 0) || any(tap >= probe_res))
+                {
+                    continue;   // out of bounds
+                }
+
+                uint probe_mask = g_ScreenProbes_ProbeMaskBuffer[tap];
+
+                if (probe_mask == kGI10_InvalidId)
+                {
+                    continue;   // invalid probe
+                }
+
+                if (x == 0 && y == 0)
+                {
+                    previous_probe_mask = probe_mask;
+                }
+
+                float2 probe_uv    = (ScreenProbes_UnpackSeed(probe_mask) + 0.5f) / g_BufferDimensions;
+                float  probe_depth = g_DepthBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).x;
+                float3 probe_pos   = InverseProject(g_ViewProjectionInverse, probe_uv, probe_depth);
+
+                if (abs(dot(probe_pos - world_pos, normal)) > cell_size)
+                {
+                    continue;   // prevent leaks from faraway probes
+                }
+
+                float3 probe_normal    = normalize(2.0f * g_NormalBuffer.Load(int3(ScreenProbes_UnpackSeed(probe_mask), 0)).xyz - 1.0f);
+                float4 probe_radiance  = g_ScreenProbes_ProbeBuffer[((ScreenProbes_UnpackSeed(probe_mask) / g_ScreenProbesConstants.probe_size) * g_ScreenProbesConstants.probe_size) + cell];
+                float3 probe_direction = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+
+                float3 b1, b2;
+                GetOrthoVectors(probe_normal, b1, b2);
+                probe_direction = probe_direction.x * b1 + probe_direction.y * b2 + probe_direction.z * probe_normal;
+
+                float3 hit_point       = probe_pos + probe_direction * probe_radiance.w;
+                float3 reprojected_dir = hit_point - world_pos;
+                float  reprojected_len = length(reprojected_dir);
+
+                reprojected_dir /= reprojected_len; // normalize
+
+                if (dot(normal, reprojected_dir) < 0.0f)
+                {
+                    continue;   // oriented hemispheres do not overlap
+                }
+
+                if (x == 0 && y == 0)
+                {
+                    InterlockedAdd(lds_ScreenProbes_RadianceReuseSampleCount, 1);
+                }
+
+                float2 remap_uv         = 0.5f * float32x3_to_hemioct(mul(reprojected_dir, CreateTBN(normal))) + 0.5f;
+                uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
+                uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+                uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(probe_radiance.xyz, reprojected_len));
+
+                InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
+                InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 1], remap_radiance.y);
+                InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 2], remap_radiance.z);
+                InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 3], remap_radiance.w);
+                InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[remap_cell_index], 1);
+            }
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if (lds_ScreenProbes_RadianceReuseSampleCount > 0)
+    {
+        previous_probe_mask = kGI10_InvalidId;
+    }
+
+    if (probe_index < probe_count)
+    {
+        float2 previous_probe_uv     = (ScreenProbes_UnpackSeed(previous_probe_mask) + 0.5f) / g_BufferDimensions;
+        float  previous_probe_depth  = g_DepthBuffer.Load(int3(ScreenProbes_UnpackSeed(previous_probe_mask), 0)).x;
+        float3 previous_probe_normal = normalize(2.0f * g_NormalBuffer.Load(int3(ScreenProbes_UnpackSeed(previous_probe_mask), 0)).xyz - 1.0f);
+        float3 previous_probe_pos    = InverseProject(g_ViewProjectionInverse, previous_probe_uv, previous_probe_depth);
+
+        uint evicted_probe_mask = kGI10_InvalidId;
+        uint updated_probe_mask = kGI10_InvalidId;
+
+        float best_evicted_probe_score = cell_size;
+        float best_updated_probe_score = cell_size;
+
+        const int kRadius = 1;
+
+        for (int y = -kRadius; y <= kRadius; ++y)
+        {
+            for (int x = -kRadius; x <= kRadius; ++x)
+            {
+                int2 tap = probe + int2(x, y);
+
+                if (any(tap < 0) || any(tap >= probe_res))
+                {
+                    continue;   // out of bounds
+                }
+
+                uint probe_index = uint(tap.x + tap.y * probe_res.x);
+
+                uint cached_tile_count = g_ScreenProbes_ProbeCachedTileListCountBuffer[probe_index];
+                uint cached_tile_index = g_ScreenProbes_ProbeCachedTileListIndexBuffer[probe_index];
+
+                for (uint i = 0; i < cached_tile_count; ++i)
+                {
+                    uint  cached_tile  = g_ScreenProbes_ProbeCachedTileListBuffer[cached_tile_index + i];
+                    uint  cached_index = g_ScreenProbes_ProbeCachedTileLRUBuffer[cached_tile];
+                    uint2 cached_probe = uint2(cached_index % dims.x, cached_index / dims.x);
+                    uint2 cached_pos   = (cached_probe * g_ScreenProbesConstants.probe_size) + cell;
+
+                    float4 cached_probe_pos    = g_ScreenProbes_ProbeCachedTileIndexBuffer[cached_probe];
+                    float3 cached_probe_normal = normalize(unpackNormal(asuint(cached_probe_pos.w)));
+
+                    if (abs(dot(cached_probe_pos.xyz - world_pos, normal)) < cell_size)
+                    {
+                        float updated_probe_score = distance(cached_probe_pos.xyz, world_pos);
+
+                        if (updated_probe_score < best_updated_probe_score && dot(normal, cached_probe_normal) > 0.95f)
+                        {
+                            updated_probe_mask       = cached_tile;
+                            best_updated_probe_score = updated_probe_score;
+                        }
+
+                        float4 cached_probe_radiance  = g_ScreenProbes_ProbeCachedTileBuffer[cached_pos];
+                        float3 cached_probe_direction = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+
+                        float3 b1, b2;
+                        GetOrthoVectors(cached_probe_normal, b1, b2);
+                        cached_probe_direction = cached_probe_direction.x * b1 + cached_probe_direction.y * b2 + cached_probe_direction.z * cached_probe_normal;
+
+                        float3 hit_point       = cached_probe_pos.xyz + cached_probe_direction * cached_probe_radiance.w;
+                        float3 reprojected_dir = hit_point - world_pos;
+                        float  reprojected_len = length(reprojected_dir);
+
+                        reprojected_dir /= reprojected_len; // normalize
+
+                        if (dot(normal, reprojected_dir) > 0.0f)
+                        {
+                            float2 remap_uv         = 0.5f * float32x3_to_hemioct(mul(reprojected_dir, CreateTBN(normal))) + 0.5f;
+                            uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
+                            uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+                            uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(cached_probe_radiance.xyz, reprojected_len));
+
+                            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
+                            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 1], remap_radiance.y);
+                            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 2], remap_radiance.z);
+                            InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 3], remap_radiance.w);
+                            InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[remap_cell_index], 1);
+                        }
+                    }
+
+                    if (previous_probe_mask != kGI10_InvalidId)
+                    {
+                        if (abs(dot(cached_probe_pos.xyz - previous_probe_pos, previous_probe_normal)) < cell_size)
+                        {
+                            float evicted_probe_score = distance(cached_probe_pos.xyz, previous_probe_pos);
+
+                            if (evicted_probe_score < best_evicted_probe_score && dot(previous_probe_normal, cached_probe_normal) > 0.95f)
+                            {
+                                evicted_probe_mask       = cached_tile;
+                                best_evicted_probe_score = evicted_probe_score;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (cell_index == 0)
+        {
+            if (previous_probe_mask != kGI10_InvalidId)
+            {
+                if (evicted_probe_mask == kGI10_InvalidId)
+                {
+                    InterlockedAdd(g_ScreenProbes_ProbeCachedTileLRUCountBuffer[0], 1, evicted_probe_mask);
+
+                    evicted_probe_mask |= 0x80000000u;  // flag newly allocated cached probe
+                }
+                else
+                {
+                    uint cached_tile_flag;
+                    InterlockedCompareExchange(g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[evicted_probe_mask], 1, 0, cached_tile_flag);
+
+                    if (cached_tile_flag != 1)
+                    {
+                        evicted_probe_mask = kGI10_InvalidId;
+                    }
+                }
+            }
+
+            if (updated_probe_mask != kGI10_InvalidId)
+            {
+                uint cached_tile_flag;
+                InterlockedCompareExchange(g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[updated_probe_mask], 1, 0, cached_tile_flag);
+
+                if (cached_tile_flag != 1)
+                {
+                    updated_probe_mask = kGI10_InvalidId;
+                }
+            }
+
+            g_ScreenProbes_ProbeSpawnProbeBuffer[did / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size)] = uint2(evicted_probe_mask, updated_probe_mask);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    float  total_weight      = float(lds_ScreenProbes_RadianceSampleCounts[local_id]);
+    float4 previous_radiance = ScreenProbes_RecoverRadiance(uint4(lds_ScreenProbes_RadianceValues[(local_id << 2) + 0],
+                                                                  lds_ScreenProbes_RadianceValues[(local_id << 2) + 1],
+                                                                  lds_ScreenProbes_RadianceValues[(local_id << 2) + 2],
+                                                                  lds_ScreenProbes_RadianceValues[(local_id << 2) + 3]));
+
+    if (total_weight > 0.0f)
+    {
+        previous_radiance /= total_weight;
+    }
+    else
+    {
+        previous_radiance.w = -1.0f;
+    }
+
+    float3 direction = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+    float  radiance  = luminance(previous_radiance.xyz) * dot(direction, float3(0.0f, 0.0f, 1.0f));
+
+    ScreenProbes_ScanRadiance(local_id, radiance);  // build our sampling CDF
+
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+
+    StratifiedSampler strat_sampler = MakeStratifiedSampler(did, g_FrameIndex);
+
+    uint sampled_cell_index = ScreenProbes_FindCellIndex(local_id, strat_sampler.rand());
+    uint2 sampled_cell      = (total_weight > 0.0f ? uint2(sampled_cell_index % g_ScreenProbesConstants.probe_size, sampled_cell_index / g_ScreenProbesConstants.probe_size) : cell);
+
+    direction = hemioct_to_float32x3(2.0f * (sampled_cell + strat_sampler.rand2()) / g_ScreenProbesConstants.probe_size - 1.0f);
+
+    float3 b1, b2;
+    GetOrthoVectors(normal, b1, b2);
+    direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
+
+    g_ScreenProbes_PreviousProbeBuffer[pos]    = previous_radiance;
+    g_ScreenProbes_ProbeSpawnSampleBuffer[did] = ScreenProbes_PackSample(direction);
+}
+
+[numthreads(32, 1, 1)]
+void PopulateScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint  probe_index          = cell_and_probe_index.y;
+
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+
+    // Read the visibility buffer and decode
+    uint2  seed         = ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]);
+    float3 normal       = g_NormalBuffer.Load(int3(seed, 0)).xyz;
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    if (is_sky_pixel)
+    {
+        return; // discard sky pixels
+    }
+
+    float3 direction = ScreenProbes_UnpackSample(g_ScreenProbes_ProbeSpawnSampleBuffer[did]);
+    normal           = normalize(2.0f * normal - 1.0f);
+
+    float4 visibility   = g_VisibilityBuffer.Load(int3(seed, 0));
+    float2 barycentrics = visibility.xy;
+    uint   instanceID   = asuint(visibility.z);
+    uint   primitiveID  = asuint(visibility.w);
+
+    Instance instance  = g_InstanceBuffer[instanceID];
+    Mesh     mesh      = g_MeshBuffer[instance.mesh_index];
+    float4x4 transform = FetchTransform(instance.transform_index);
+
+    uint3 indices = g_IndexBuffers[0].Load3(mesh.index_offset + 3 * primitiveID * mesh.index_stride);
+
+    float3 v0 = mul(transform, float4(asfloat(g_VertexBuffers[0].Load3(mesh.vertex_offset + indices.x * mesh.vertex_stride)), 1.0f)).xyz;
+    float3 v1 = mul(transform, float4(asfloat(g_VertexBuffers[0].Load3(mesh.vertex_offset + indices.y * mesh.vertex_stride)), 1.0f)).xyz;
+    float3 v2 = mul(transform, float4(asfloat(g_VertexBuffers[0].Load3(mesh.vertex_offset + indices.z * mesh.vertex_stride)), 1.0f)).xyz;
+
+    float3 world  = interpolate(v0, v1, v2, barycentrics);
+    float3 origin = offsetPosition(world, normal);
+
+    RayDesc ray_desc;
+    ray_desc.Direction = direction;
+    ray_desc.Origin    = origin;
+    ray_desc.TMin      = 0.0f;
+    ray_desc.TMax      = 1e9f;
+
+    ClosestRayQuery ray_query = TraceRay<ClosestRayQuery>(ray_desc);
+
+    float3 sky_sample = float3(0.0f, 0.0f, 0.0f);
+
+    // If we hit some geometry, we append a new world-space hash-grid cache query
+    if (ray_query.CommittedStatus() == COMMITTED_NOTHING)
+    {
+        if (g_UseDirectLighting != 0)
+        {
+            sky_sample = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, direction, 0.0f).xyz;
+        }
+    }
+    else
+    {
+        float hit_dist = ray_query.CommittedRayT();
+
+        HashGridCache_Data data;
+        data.eye_position = g_Eye;
+        data.hit_position = world + hit_dist * direction;
+        data.direction    = direction;
+        data.hit_distance = hit_dist;
+
+        uint tile_index;
+        bool is_new_tile;
+        uint cell_index = HashGridCache_InsertCell(data, tile_index, is_new_tile);
+
+        if (cell_index != kGI10_InvalidId)
+        {
+            // Bump the cell's decay to the max. now that it's been 'touched'
+            uint previous_tile_decay;
+            InterlockedExchange(g_HashGridCache_DecayTileBuffer[tile_index], g_FrameIndex, previous_tile_decay);
+
+            // We update the cell index for later passes
+            uint visibility_index;
+            InterlockedAdd(g_HashGridCache_VisibilityCountBuffer[0], 1, visibility_index);
+            g_HashGridCache_VisibilityBuffer[visibility_index]      = HashGridCache_PackVisibility(ray_query);
+            g_HashGridCache_VisibilityCellBuffer[visibility_index]  = cell_index;
+            g_HashGridCache_VisibilityQueryBuffer[visibility_index] = did;
+
+            // Write out bounds of visibility
+            LightBounds_StorePosition(data.hit_position);
+
+            // If this cell is inside a new tile, we need to add the tile to the packed storage and clear its cells.
+            if (is_new_tile)
+            {
+                uint packed_tile_index;
+                InterlockedAdd(g_HashGridCache_PackedTileCountBuffer[0], 1, packed_tile_index);
+                g_HashGridCache_PackedTileIndexBuffer[packed_tile_index] = tile_index;
+
+                // Clear mip0 cells (others will be reset anyways by UpdateTiles)
+                for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; ++cell_offset)
+                {
+                    uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
+                    g_HashGridCache_ValueBuffer[cell_index] = uint2(0, 0);
+                }
+            }
+
+            // If we're the 1st invocation touching this cell (this frame), we want to clear the
+            // scratch storage that'll be used for atomically updating the radiance.
+            // The accumulation will be resolved in the 'UpdateTiles()' kernel to
+            // avoid integer overflow.
+            if (is_new_tile || previous_tile_decay != g_FrameIndex)
+            {
+                uint update_tile_index;
+                InterlockedAdd(g_HashGridCache_UpdateTileCountBuffer[0], 1, update_tile_index);
+                g_HashGridCache_UpdateTileBuffer[update_tile_index] = tile_index;
+            }
+
+#ifdef DEBUG_HASH_CELLS
+            // For debugging purposes, we need to be able to retrieve the position
+            // & orientation of cells as we iterate the content of the cache.
+            // So, write the packed cell descriptor out to memory in this case.
+            if (is_new_tile)
+            {
+                // Clear debug cells (all mips)
+                for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile; ++cell_offset)
+                {
+                    uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
+                    g_HashGridCache_DebugCellBuffer[cell_index] = HashGridCache_ClearDebugCell();
+                }
+            }
+
+            float4 packed_debug_cell;
+            uint debug_cell_index = HashGridCache_PackDebugCell(data, tile_index, packed_debug_cell);
+
+            // BE CAREFUL: writing to g_HashGridCache_DebugCellBuffer isn't atomic and several writings could occur
+            uint previous_cell_decay;
+            InterlockedExchange(g_HashGridCache_DecayCellBuffer[debug_cell_index], g_FrameIndex, previous_cell_decay);
+            if (previous_cell_decay != g_FrameIndex)
+            {
+                g_HashGridCache_DebugCellBuffer[debug_cell_index] = packed_debug_cell;
+            }
+#endif // DEBUG_HASH_CELLS
+        }
+    }
+
+    g_ScreenProbes_ProbeSpawnRadianceBuffer[did] = ScreenProbes_PackRadiance(float4(sky_sample, ray_query.CommittedRayT()));
+}
+
+[numthreads(64, 1, 1)]
+void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint  cell_index           = cell_and_probe_index.x;
+    uint  probe_index          = cell_and_probe_index.y;
+
+    uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    uint2 seed  = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
+    uint2 probe = (seed / g_ScreenProbesConstants.probe_size);
+    uint2 pos   = (probe * g_ScreenProbesConstants.probe_size) + cell;
+
+    // Initialize our LDS...
+    {
+        lds_ScreenProbes_RadianceValues[(local_id << 2) + 0] = 0;
+        lds_ScreenProbes_RadianceValues[(local_id << 2) + 1] = 0;
+        lds_ScreenProbes_RadianceValues[(local_id << 2) + 2] = 0;
+        lds_ScreenProbes_RadianceValues[(local_id << 2) + 3] = 0;
+        lds_ScreenProbes_RadianceSampleCounts[local_id] = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // ... and accumulate into the sampled cells
+    if (probe_index < probe_count)
+    {
+        float3 normal    = normalize(2.0f * g_NormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+        float3 direction = ScreenProbes_UnpackSample(g_ScreenProbes_ProbeSpawnSampleBuffer[did]);
+        float4 radiance  = ScreenProbes_UnpackRadiance(g_ScreenProbes_ProbeSpawnRadianceBuffer[did]);
+
+        uint4 quantized_radiance = ScreenProbes_QuantizeRadiance(radiance);
+        uint2 sampled_cell       = uint2((0.5f * float32x3_to_hemioct(mul(direction, CreateTBN(normal))) + 0.5f) * g_ScreenProbesConstants.probe_size);
+        uint  sampled_cell_index = sampled_cell.x + sampled_cell.y * g_ScreenProbesConstants.probe_size;
+
+        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 0], quantized_radiance.x);
+        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 1], quantized_radiance.y);
+        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 2], quantized_radiance.z);
+        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 3], quantized_radiance.w);
+        InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[sampled_cell_index], 1);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Calculate the radiance backup value to be used for untraced cells
+    lds_ScreenProbes_RadianceBackup[local_id] = float4(ScreenProbes_RecoverRadiance(uint3(lds_ScreenProbes_RadianceValues[(local_id << 2) + 0],
+                                                                                          lds_ScreenProbes_RadianceValues[(local_id << 2) + 1],
+                                                                                          lds_ScreenProbes_RadianceValues[(local_id << 2) + 2])),
+                                                                                          lds_ScreenProbes_RadianceSampleCounts[local_id] > 0.0f ? 1.0f : 0.0f);
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint stride = 1; stride < 64; stride <<= 1)
+    {
+        if (local_id < 64 / (2 * stride))
+            lds_ScreenProbes_RadianceBackup[2 * (local_id + 1) * stride - 1] += lds_ScreenProbes_RadianceBackup[(2 * local_id + 1) * stride - 1];
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (local_id == 0)
+    {
+        float4 total_radiance   = lds_ScreenProbes_RadianceBackup[64 - 1];
+        float3 radiance         = total_radiance.xyz / max(total_radiance.w, 1.0f);
+        float  empty_cell_count = (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size - total_radiance.w);
+
+        lds_ScreenProbes_RadianceBackup[0] = float4(radiance / max(empty_cell_count, 1.0f), 1e9f);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // We can now map back to our regular probe grid
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+
+    float4 radiance = ScreenProbes_RecoverRadiance(uint4(lds_ScreenProbes_RadianceValues[(local_id << 2) + 0],
+                                                         lds_ScreenProbes_RadianceValues[(local_id << 2) + 1],
+                                                         lds_ScreenProbes_RadianceValues[(local_id << 2) + 2],
+                                                         lds_ScreenProbes_RadianceValues[(local_id << 2) + 3]));
+
+    uint sample_count = lds_ScreenProbes_RadianceSampleCounts[local_id];
+
+    if (sample_count > 0)
+    {
+        radiance /= sample_count;
+    }
+    else
+    {
+        radiance = lds_ScreenProbes_RadianceBackup[0];
+    }
+
+    float4 previous_radiance = g_ScreenProbes_PreviousProbeBuffer[pos];
+
+    if (previous_radiance.w > 0.0f)
+    {
+        float lumaA = luminance(radiance.xyz);
+        float lumaB = luminance(previous_radiance.xyz);
+
+        // Shadow-preserving biased temporal hysteresis (inspired by: https://www.youtube.com/watch?v=WzpLWzGvFK4&t=630s)
+        float temporal_blend = squared(clamp(max(lumaA - lumaB - min(lumaA, lumaB), 0.0f) / max(max(lumaA, lumaB), 1e-4f), 0.0f, 0.95f));
+
+        radiance = lerp(radiance, previous_radiance, temporal_blend);
+    }
+
+    uint2 dims;
+    g_ScreenProbes_ProbeCachedTileIndexBuffer.GetDimensions(dims.x, dims.y);
+
+    uint evicted_probe_mask = g_ScreenProbes_ProbeSpawnProbeBuffer[did / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size)].x;
+    uint updated_probe_mask = g_ScreenProbes_ProbeSpawnProbeBuffer[did / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size)].y;
+
+    if (evicted_probe_mask != kGI10_InvalidId && evicted_probe_mask >= g_ScreenProbes_ProbeCachedTileLRUCountBuffer[0])
+    {
+        if ((evicted_probe_mask & 0x80000000u) != 0)
+        {
+            evicted_probe_mask &= ~0x80000000u; // unmask
+
+            g_ScreenProbes_ProbeCachedTileLRUBuffer[evicted_probe_mask]    &= ~0x80000000u;
+            g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[evicted_probe_mask] = 0;
+        }
+
+        uint  cached_index = g_ScreenProbes_ProbeCachedTileLRUBuffer[evicted_probe_mask];
+        uint2 cached_probe = uint2(cached_index % dims.x, cached_index / dims.x);
+        uint2 cached_pos   = (cached_probe * g_ScreenProbesConstants.probe_size) + cell;
+
+        if (cell_index == 0)
+        {
+            uint previous_probe_mask = g_ScreenProbes_ProbeMaskBuffer[probe];
+
+            uint cached_tile_mru_index;
+            InterlockedAdd(g_ScreenProbes_ProbeCachedTileMRUCountBuffer[0], 1, cached_tile_mru_index);
+
+            g_ScreenProbes_ProbeCachedTileMRUBuffer[evicted_probe_mask] = cached_tile_mru_index;
+
+            float2 previous_uv     = (ScreenProbes_UnpackSeed(previous_probe_mask) + 0.5f) / g_BufferDimensions;
+            float  previous_depth  = g_DepthBuffer.Load(int3(ScreenProbes_UnpackSeed(previous_probe_mask), 0)).x;
+            float3 previous_normal = normalize(2.0f * g_NormalBuffer.Load(int3(ScreenProbes_UnpackSeed(previous_probe_mask), 0)).xyz - 1.0f);
+            float3 previous_world  = InverseProject(g_ViewProjectionInverse, previous_uv, previous_depth);
+
+            g_ScreenProbes_ProbeCachedTileIndexBuffer[cached_probe] = float4(previous_world, asfloat(packNormal(previous_normal)));
+        }
+
+        g_ScreenProbes_ProbeCachedTileBuffer[cached_pos] = g_ScreenProbes_ProbeBuffer[pos];
+    }
+
+    if (updated_probe_mask != kGI10_InvalidId && updated_probe_mask >= g_ScreenProbes_ProbeCachedTileLRUCountBuffer[0])
+    {
+        uint  cached_index = g_ScreenProbes_ProbeCachedTileLRUBuffer[updated_probe_mask];
+        uint2 cached_probe = uint2(cached_index % dims.x, cached_index / dims.x);
+        uint2 cached_pos   = (cached_probe * g_ScreenProbesConstants.probe_size) + cell;
+
+        if (cell_index == 0)
+        {
+            g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[updated_probe_mask] = 1;
+        }
+
+        g_ScreenProbes_ProbeCachedTileBuffer[cached_pos] = radiance;
+    }
+
+    if (cell_index == 0)
+    {
+        g_ScreenProbes_ProbeMaskBuffer[probe] = ScreenProbes_PackSeed(seed);
+    }
+
+    g_ScreenProbes_ProbeBuffer[pos] = radiance;
+}
+
+[numthreads(64, 1, 1)]
+void ReorderScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint2 dims;
+    g_ScreenProbes_ProbeCachedTileIndexBuffer.GetDimensions(dims.x, dims.y);
+
+    if (did >= (dims.x * dims.y))
+    {
+        return; // out of bounds
+    }
+
+    uint cached_tile_index  = g_ScreenProbes_ProbeCachedTileLRUBuffer[did];
+    uint cached_tile_flag   = g_ScreenProbes_ProbeCachedTileLRUFlagBuffer[did];
+    uint cached_tile_offset = g_ScreenProbes_ProbeCachedTileLRUIndexBuffer[did];
+
+    if (cached_tile_flag == 0)
+    {
+        cached_tile_offset = g_ScreenProbes_ProbeCachedTileMRUBuffer[did] + g_ScreenProbes_ProbeCachedTileLRUIndexBuffer[dims.x * dims.y];
+    }
+
+    g_ScreenProbes_PreviousProbeCachedTileLRUBuffer[cached_tile_offset] = cached_tile_index;
+}
+
+[numthreads(64, 1, 1)]
+void FilterScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint  cell_index           = cell_and_probe_index.x;
+    uint  probe_index          = cell_and_probe_index.y;
+
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+
+    uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    uint2 seed  = ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]);
+    uint2 probe = (seed / g_ScreenProbesConstants.probe_size);
+    uint2 pos   = (probe * g_ScreenProbesConstants.probe_size) + cell;
+
+    float2 uv        = (seed + 0.5f) / g_BufferDimensions;
+    float  depth     = g_DepthBuffer.Load(int3(seed, 0)).x;
+    float3 normal    = normalize(2.0f * g_NormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+    float3 world_pos = InverseProject(g_ViewProjectionInverse, uv, depth);
+    float  cell_size = distance(g_Eye, world_pos) * g_ScreenProbesConstants.cell_size;
+
+    float4 radiance     = g_ScreenProbes_PreviousProbeBuffer[pos];
+    float3 direction    = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+    float  hit_distance = radiance.w;
+    float  total_weight = 1.0f;
+
+    float3 b1, b2;
+    GetOrthoVectors(normal, b1, b2);
+    direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
+
+    const int kRadius = 3;
+    const int kSize   = (kRadius << 1);
+
+    for (int i = 0; i < kSize; ++i)
+    {
+        int  step       = (((i & 1) << 1) - 1) * ((i >> 1) + 1);
+        uint probe_mask = ScreenProbes_FindClosestProbe(seed, step * g_BlurDirection);
+
+        if (probe_mask == kGI10_InvalidId)
+        {
+            continue;   // invalid probe
+        }
+
+        uint2  probe_seed   = ScreenProbes_UnpackSeed(probe_mask);
+        float2 probe_uv     = (probe_seed + 0.5f) / g_BufferDimensions;
+        float  probe_depth  = g_DepthBuffer.Load(int3(probe_seed, 0)).x;
+        float3 probe_normal = normalize(2.0f * g_NormalBuffer.Load(int3(probe_seed, 0)).xyz - 1.0f);
+        float3 probe_world  = InverseProject(g_ViewProjectionInverse, probe_uv, probe_depth);
+
+        if (abs(dot(probe_world - world_pos, normal)) > cell_size || dot(direction, probe_normal) < 0.0f)
+        {
+            continue;   // oriented hemispheres do not overlap
+        }
+
+        uint2 probe_cell = uint2((0.5f * float32x3_to_hemioct(mul(direction, CreateTBN(probe_normal))) + 0.5f) * g_ScreenProbesConstants.probe_size);
+        uint2 probe_tile = (probe_seed / g_ScreenProbesConstants.probe_size);
+        uint2 probe_pos  = (probe_tile * g_ScreenProbesConstants.probe_size) + probe_cell;
+
+        GetOrthoVectors(probe_normal, b1, b2);
+        float3 probe_direction = hemioct_to_float32x3(2.0f * (probe_cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+        probe_direction = normalize(probe_direction.x * b1 + probe_direction.y * b2 + probe_direction.z * probe_normal);
+
+        float  probe_hit_distance = min(g_ScreenProbes_PreviousProbeBuffer[probe_pos].w, hit_distance);
+        float3 hit_point          = probe_world + probe_direction * probe_hit_distance;
+        float3 reprojected_dir    = normalize(hit_point - world_pos);
+
+        if (dot(direction, reprojected_dir) < kGI10_AngleThreshold)
+        {
+            continue;   // skip probes with high angle error after hit reprojection
+        }
+
+        float weight = pow(saturate(1.0f - abs(GetLinearDepth(probe_depth) - GetLinearDepth(depth)) / GetLinearDepth(depth)), 8.0f);
+
+        radiance     += weight * float4(GIDenoiser_RemoveNaNs(g_ScreenProbes_PreviousProbeBuffer[probe_pos].xyz), probe_hit_distance);
+        total_weight += weight;
+
+        hit_distance = radiance.w / total_weight;
+    }
+
+    g_ScreenProbes_ProbeBuffer[pos] = (radiance / total_weight);
+}
+
+[numthreads(64, 1, 1)]
+void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint  cell_index           = cell_and_probe_index.x;
+    uint  probe_index          = cell_and_probe_index.y;
+
+    uint2 cell      = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    uint2 seed      = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
+    uint2 probe     = (seed / g_ScreenProbesConstants.probe_size);
+    uint2 probe_pos = (probe * g_ScreenProbesConstants.probe_size) + cell;
+
+    // Compute our SH probe
+    if (probe_index < probe_count)
+    {
+        float3 normal    = normalize(2.0f * g_NormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+        float3 radiance  = g_ScreenProbes_ProbeBuffer[probe_pos].xyz / g_ScreenProbesConstants.probe_size;
+        float3 direction = hemioct_to_float32x3(2.0f * (cell + 0.5f) / g_ScreenProbesConstants.probe_size - 1.0f);
+
+        float3 b1, b2;
+        GetOrthoVectors(normal, b1, b2);
+        direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
+
+        float direction_sh[9];
+        SH_GetCoefficients(direction, direction_sh);
+
+        for (uint j = 0; j < 9; ++j)
+        {
+            lds_ScreenProbes_ProbeSHBuffer[9 * local_id + j] = float4(direction_sh[j] * radiance, 1.0f);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+
+    // Resolve the probe and write out the SH coefficients
+    uint sh_index = cell.x + cell.y * g_ScreenProbesConstants.probe_size;
+
+    if (sh_index < 9)
+    {
+        float4 irradiance_sh = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        uint2 offset = (uint2(local_id & 7, local_id >> 3) / g_ScreenProbesConstants.probe_size) * g_ScreenProbesConstants.probe_size;
+
+        for (uint y = 0; y < g_ScreenProbesConstants.probe_size; ++y)
+        {
+            for (uint x = 0; x < g_ScreenProbesConstants.probe_size; ++x)
+            {
+                uint2 pos   = uint2(x, y) + offset;
+                uint  index = pos.x + (pos.y << 3);
+
+                irradiance_sh += lds_ScreenProbes_ProbeSHBuffer[9 * index + sh_index];
+            }
+        }
+
+        uint index = probe.x + probe.y * ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size);
+
+        g_ScreenProbes_ProbeSHBuffer[9 * index + sh_index] = ScreenProbes_PackSHColor(irradiance_sh);
+    }
+}
+
+[numthreads(8, 8, 1)]
+void InterpolateScreenProbes(in uint2 did : SV_DispatchThreadID)
+{
+    float  depth        = g_DepthBuffer.Load(int3(did, 0)).x;
+    float3 normal       = g_NormalBuffer.Load(int3(did, 0)).xyz;
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    if (is_sky_pixel || any(did >= g_BufferDimensions))
+    {
+        g_GIDenoiser_ColorBuffer[did] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+        return; // discard sky pixels
+    }
+
+    normal = normalize(2.0f * normal - 1.0f);   // recover normal vector
+
+    uint2  pos       = did;
+    float2 uv        = (did + 0.5f) / g_BufferDimensions;
+    float3 world_pos = InverseProject(g_ViewProjectionInverse, uv, depth);
+    float  cell_size = distance(g_Eye, world_pos) * g_ScreenProbesConstants.cell_size;
+
+    float2 s             = BlueNoise_Sample2D(did, g_FrameIndex);
+    int2   jitter        = (2.0f * s - 1.0f) * g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint2  new_pos       = clamp(int2(did) + jitter, 0, int2(g_BufferDimensions) - 1);
+    float2 new_uv        = (new_pos + 0.5f) / g_BufferDimensions;
+    float  new_depth     = g_DepthBuffer.Load(int3(new_pos, 0)).x;
+    float3 new_world_pos = InverseProject(g_ViewProjectionInverse, new_uv, new_depth);
+
+    if (abs(dot(new_world_pos - world_pos, normal)) < 0.5f * cell_size)
+    {
+        pos = new_pos;  // only apply the jitter if the new position lies in the original pixel plane
+    }
+
+    uint4 probes;   // locate nearby probes for interpolation
+
+    probes.x = ScreenProbes_FindClosestProbe(pos);
+
+    if (probes.x == kGI10_InvalidId)
+    {
+        g_GIDenoiser_ColorBuffer[did] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+        return; // couldn't find any nearby probe...
+    }
+
+    uint2 seed   = ScreenProbes_UnpackSeed(probes.x);
+    int2  offset = int2(pos.x < seed.x ? -1 : 1, pos.y < seed.y ? -1 : 1);
+
+    probes.y = ScreenProbes_FindClosestProbe(pos, int2(offset.x, 0));
+    probes.z = ScreenProbes_FindClosestProbe(pos, int2(0, offset.y));
+    probes.w = ScreenProbes_FindClosestProbe(pos, offset);
+
+    if (probes.y == probes.x)                                                 probes.y = kGI10_InvalidId;
+    if (probes.z == probes.y || probes.z == probes.x)                         probes.z = kGI10_InvalidId;
+    if (probes.w == probes.z || probes.w == probes.y || probes.w == probes.x) probes.w = kGI10_InvalidId;
+
+    float4 w = float4(0.0f, 0.0f, 0.0f, 0.0f);  // calculate per-probe blending weights
+
+    for (uint i = 0; i < 4; ++i)
+    {
+        if (probes[i] != kGI10_InvalidId)
+        {
+            uint2 probe_seed = ScreenProbes_UnpackSeed(probes[i]);
+
+            float2 probe_uv    = (probe_seed + 0.5f) / g_BufferDimensions;
+            float  probe_depth = g_DepthBuffer.Load(int3(probe_seed, 0)).x;
+            float3 probe_pos   = InverseProject(g_ViewProjectionInverse, probe_uv, probe_depth);
+
+            if (abs(dot(probe_pos - world_pos, normal)) > cell_size)
+                w[i] = 0.0f;    // prevent probes ahead of pixel plane to leak radiance into occluded background
+            else
+            {
+                w[i]  = saturate(1.0f - abs(GetLinearDepth(probe_depth) - GetLinearDepth(depth)) / GetLinearDepth(depth));
+                w[i] *= max(dot(normal, normalize(2.0f * g_NormalBuffer.Load(int3(probe_seed, 0)).xyz - 1.0f)), 0.0f);
+                w[i]  = pow(w[i], 8.0f);    // make it steep
+            }
+        }
+    }
+
+    bool use_backup = false;
+
+    if (dot(w, w) == 0.0f)
+    {
+        w = float4(1.0f, probes.y != kGI10_InvalidId ? 1.0f : 0.0f
+                       , probes.z != kGI10_InvalidId ? 1.0f : 0.0f
+                       , probes.w != kGI10_InvalidId ? 1.0f : 0.0f);
+
+        use_backup = true;  // for 'relaxed' interpolation in failure cases
+    }
+
+    w /= w.x + w.y + w.z + w.w; // weights must sum up to 1
+
+#ifndef HAS_OCCLUSION
+    float  ao         = 1.0f;
+    float3 irradiance = float3(0.0f, 0.0f, 0.0f);
+    normal            = normalize(2.0f * g_DetailsBuffer.Load(int3(did, 0)).xyz - 1.0f);
+#else // HAS_OCCLUSION
+    float4 ao_and_bent_normal = g_OcclusionAndBentNormalBuffer.Load(int3(did, 0));
+
+    float  ao         = ao_and_bent_normal.w;
+    float3 irradiance = g_NearFieldGlobalIlluminationBuffer.Load(int3(did, 0)).rgb;
+    normal            = normalize(2.0f * ao_and_bent_normal.xyz - 1.0f);
+#endif // HAS_OCCLUSION
+
+    for (uint j = 0; j < 4; ++j)
+    {
+        uint2 probe = ScreenProbes_UnpackSeed(probes[j]) / g_ScreenProbesConstants.probe_size;
+
+        irradiance += w[j] * ScreenProbes_CalculateSHIrradiance_BentCone(normal, ao, probe);
+    }
+
+    float denoiser_hint = (use_backup ? 0.0f : 1.0f);   // hint to the denoiser that we should ideally not keep this sample...
+
+    g_GIDenoiser_ColorBuffer[did] = float4(irradiance, denoiser_hint);
+}
+
+//!
+//! Hash-grid cache kernels.
+//!
+
+[numthreads(64, 1, 1)]
+void PurgeTiles(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_HashGridCache_PreviousPackedTileCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    // We opt for calculating the decay of each tile from the
+    // current frame index, as it saves many writes per frame
+    // and is quite a bit faster than having to decrement all
+    // cell's decay values.
+    uint tile_index = g_HashGridCache_PreviousPackedTileIndexBuffer[did];
+    uint tile_decay = g_HashGridCache_DecayTileBuffer[tile_index];
+
+    if (g_FrameIndex < tile_decay)   // account for integer wraparound case
+    {
+        tile_decay = ((0xFFFFFFFFu - tile_decay) + g_FrameIndex + 1);
+    }
+    else
+    {
+        tile_decay = (g_FrameIndex - tile_decay);
+    }
+
+    if (tile_decay >= kHashGridCache_TileDecay)
+    {
+        g_HashGridCache_HashBuffer[tile_index] = 0;
+
+#ifdef DEBUG_HASH_CELLS
+        // Clear all mipmaps
+        for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile; ++cell_offset)
+        {
+            uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
+            g_HashGridCache_DecayCellBuffer[cell_index] = 0xFFFFFFFFu;
+        }
+#endif // DEBUG_HASH_CELLS
+
+        return; // kill the tile
+    }
+
+    uint packed_tile_index;
+    InterlockedAdd(g_HashGridCache_PackedTileCountBuffer[0], 1, packed_tile_index);
+    g_HashGridCache_PackedTileIndexBuffer[packed_tile_index] = tile_index;
+}
+
+[numthreads(32, 1, 1)]
+void PopulateCells(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_HashGridCache_VisibilityRayCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    uint                     visibility_index = (g_HashGridCache_VisibilityRayBuffer[did] & ~0x80000000u);
+    HashGridCache_Visibility visibility       = HashGridCache_UnpackVisibility(g_HashGridCache_VisibilityBuffer[visibility_index]);
+
+    uint query_index = g_HashGridCache_VisibilityQueryBuffer[visibility_index];
+    uint probe_index = ScreenProbes_GetCellAndProbeIndex(query_index).y;
+
+    // Reconstruct world-space position and normal
+    Instance instance  = g_InstanceBuffer[visibility.instance_index];
+    Mesh     mesh      = g_MeshBuffer[instance.mesh_index + visibility.geometry_index];
+    float4x4 transform = FetchTransform(instance.transform_index);
+
+    Vertex v0, v1, v2;
+    FetchVertices(mesh, visibility.primitive_index, v0, v1, v2);
+
+    v0.position.xyz = mul(transform, float4(v0.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+    v1.position.xyz = mul(transform, float4(v1.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+    v2.position.xyz = mul(transform, float4(v2.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+
+    v0.normal.xyz = transformDirection(v0.normal.xyz, transform);
+    v1.normal.xyz = transformDirection(v1.normal.xyz, transform);
+    v2.normal.xyz = transformDirection(v2.normal.xyz, transform);
+
+    float3 world  =                                                       interpolate(v0.position.xyz, v1.position.xyz, v2.position.xyz, visibility.barycentrics);
+    float3 normal = (visibility.is_front_face ? 1.0f : -1.0f) * normalize(interpolate(v0.normal.xyz,   v1.normal.xyz,   v2.normal.xyz,   visibility.barycentrics));
+
+    // Retrieve the light sample that we should use for our shadow ray
+    MaterialBRDF material  = unpackMaterial(g_Reservoir_IndirectSampleMaterialBuffer[did]);
+    Reservoir reservoir    = unpackReservoir(g_Reservoir_IndirectSampleReservoirBuffer[did]);
+
+    // Decode the light sample from our reservoir
+    float  light_weight   = reservoir.W;
+    float3 direction, light_position;
+    // Approximate visible light surface based on number of samples being used
+    const float solid_angle = FOUR_PI / (kReservoir_SampleCount * 12000.0f);
+    Light selected_light = getLight(reservoir.lightSample.index);
+    float3 light_radiance = evaluateLightConeSampled(selected_light, world, reservoir.lightSample.sampleParams, solid_angle, direction, light_position);
+
+    // Traverse the BVH
+    RayDesc ray_desc;
+    ray_desc.Direction = direction;
+    ray_desc.Origin    = offsetPosition(world + g_PreViewTranslation, normal);
+    ray_desc.TMin      = 0.0f;
+    ray_desc.TMax      = hasLightPosition(selected_light) ? length(light_position - ray_desc.Origin) : FLT_MAX;
+
+    ShadowRayQuery ray_query = TraceRay<ShadowRayQuery>(ray_desc);
+
+    // Evaluate the radiance contribution
+    float3 lighting = float3(0.0f, 0.0f, 0.0f);
+    uint2 seed = ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]);
+
+    if (ray_query.CommittedStatus() == COMMITTED_NOTHING)
+    {
+        // Recover the ray origin
+        float  depth  = g_DepthBuffer.Load(int3(seed, 0)).x;
+        float2 uv     = (seed + 0.5f) / g_BufferDimensions;
+        float3 origin = InverseProject(g_ViewProjectionInverse, uv, depth);
+
+        // And evaluate our lighting
+        lighting += evaluateBRDF(material, normal, normalize(origin - world), direction) * light_radiance * light_weight;
+    }
+    else
+    {
+        // Update our reservoir cache for next frame's temporal resampling
+#ifdef USE_RESAMPLING
+        reservoir.W = 0.0f; // invalidate the reservoir
+
+        g_Reservoir_IndirectSampleReservoirBuffer[did] = packReservoir(reservoir);
+#endif // USE_RESAMPLING
+    }
+
+    // And update the hash-grid cell payload
+    uint  cell_index         = g_HashGridCache_VisibilityCellBuffer[visibility_index];
+    uint4 quantized_radiance = HashGridCache_QuantizeRadiance(lighting);
+
+    if (dot(lighting, lighting) > 0.0f)
+    {
+        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 0], quantized_radiance.x);
+        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 1], quantized_radiance.y);
+        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 2], quantized_radiance.z);
+    }
+    InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 3], quantized_radiance.w);
+
+    // In some cases, we want to bypass the cache to avoid light leaks;
+    // so we simply patch the screen probes directly and invalidate the
+    // cache connection.
+    bool is_bypass_cache = ((g_HashGridCache_VisibilityRayBuffer[did] >> 31) != 0);
+
+    if (is_bypass_cache)
+    {
+        ScreenProbes_AccumulateRadiance(query_index, GIDenoiser_RemoveNaNs(lighting));
+    }
+}
+
+// BE CAREFUL: we assume
+//             UPDATE_TILES_NOT_SLICED_GROUP_* >= g_HashGridCacheConstants.size_tile_mip0
+//             UPDATE_TILES_NOT_SLICED_GROUP_*  % g_HashGridCacheConstants.size_tile_mip0 == 0
+//
+#define UPDATE_TILES_GROUP_X 8
+#define UPDATE_TILES_GROUP_Y 8
+#define UPDATE_TILES_GROUP_SIZE (UPDATE_TILES_GROUP_X * UPDATE_TILES_GROUP_Y)
+
+groupshared uint2 lds_UpdateTiles_ValueBuffer[UPDATE_TILES_GROUP_X][UPDATE_TILES_GROUP_Y];
+
+[numthreads(1, 1, 1)]
+void GenerateUpdateTilesDispatch()
+{
+    uint num_tiles_by_group = UPDATE_TILES_GROUP_SIZE / g_HashGridCacheConstants.num_cells_per_tile_mip0;
+
+    DispatchCommand dispatch_command;
+    dispatch_command.num_groups_x = (g_HashGridCache_UpdateTileCountBuffer[0] + num_tiles_by_group - 1) / num_tiles_by_group;
+    dispatch_command.num_groups_y = 1;
+    dispatch_command.num_groups_z = 1;
+    dispatch_command.padding = 0;
+    g_DispatchCommandBuffer[0] = dispatch_command;
+}
+
+[numthreads(UPDATE_TILES_GROUP_X, UPDATE_TILES_GROUP_Y, 1)]
+void UpdateTiles(in uint group_id : SV_GroupID, in uint2 group_thread_id : SV_GroupThreadID)
+{
+    // A group cover from 1 tile/subgroup (8x8) to 64 tiles/subgroups (1x1)
+    uint2 subgroup_id        = group_thread_id / g_HashGridCacheConstants.size_tile_mip0;
+    uint2 subgroup_thread_id = group_thread_id % g_HashGridCacheConstants.size_tile_mip0;
+    uint2 subgroup_size      = uint2(UPDATE_TILES_GROUP_X, UPDATE_TILES_GROUP_Y) / g_HashGridCacheConstants.size_tile_mip0;
+    uint  update_tile_index  = group_id * subgroup_size.x * subgroup_size.y +
+                               subgroup_id.y * subgroup_size.x +
+                               subgroup_id.x;
+
+    if (update_tile_index >= g_HashGridCache_UpdateTileCountBuffer[0])
+    {
+        return;
+    }
+
+    uint tile_index = g_HashGridCache_UpdateTileBuffer[update_tile_index];
+
+    // MIP 0
+    {
+        uint cell_index  = HashGridCache_CellIndex(subgroup_thread_id, tile_index, 0);
+
+        // Temporal accumulation
+        float4 radiance     = HashGridCache_UnpackRadiance(g_HashGridCache_ValueBuffer[cell_index]);
+        float4 new_radiance = HashGridCache_RecoverRadiance(uint4(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 0],
+                                                                  g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 1],
+                                                                  g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 2],
+                                                                  g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 3]));
+
+        float sample_count = min(radiance.w + new_radiance.w, g_HashGridCacheConstants.max_sample_count);
+
+        radiance     /= max(radiance.w, 1.0f);
+        new_radiance /= max(new_radiance.w, 1.0f);
+
+        if (radiance.w <= 0.0f)
+        {
+            radiance = new_radiance;
+        }
+        else
+        {
+            radiance = lerp(radiance, new_radiance, 1.0f / sample_count);
+        }
+
+        radiance *= sample_count;   // sample count is used as a hint for picking prefiltering amount
+
+        // Pack
+        uint2 packed_radiance = HashGridCache_PackRadiance(radiance);
+        lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance;
+        g_HashGridCache_ValueBuffer[cell_index] = packed_radiance;
+
+        // Clear scratch
+        g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 0] = 0;
+        g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 1] = 0;
+        g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 2] = 0;
+        g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 3] = 0;
+    }
+
+    // MIP 1
+    GroupMemoryBarrierWithGroupSync();
+    [branch]
+    if(g_HashGridCacheConstants.size_tile_mip1 > 0 && all((group_thread_id % 2) == 0))
+    {
+        uint cell_index = HashGridCache_CellIndex(subgroup_thread_id, tile_index, 1);
+
+        // Box filter
+        uint2 packed_radiance00 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 0];
+        uint2 packed_radiance10 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 1][group_thread_id.y + 0];
+        uint2 packed_radiance01 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 1];
+        uint2 packed_radiance11 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 1][group_thread_id.y + 1];
+
+        float4 radiance = float4(0.f, 0.f, 0.f, 0.f);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance00);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance10);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance01);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance11);
+
+        // Pack
+        uint2 packed_radiance = HashGridCache_PackRadiance(radiance);
+        lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance;
+        g_HashGridCache_ValueBuffer[cell_index] = packed_radiance;
+    }
+
+    // MIP 2
+    GroupMemoryBarrierWithGroupSync();
+    [branch]
+    if(g_HashGridCacheConstants.size_tile_mip2 > 0 && all((group_thread_id % 4) == 0))
+    {
+        uint cell_index = HashGridCache_CellIndex(subgroup_thread_id, tile_index, 2);
+
+        // Box filter
+        uint2 packed_radiance00 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 0];
+        uint2 packed_radiance20 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 2][group_thread_id.y + 0];
+        uint2 packed_radiance02 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 2];
+        uint2 packed_radiance22 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 2][group_thread_id.y + 2];
+
+        float4 radiance = float4(0.f, 0.f, 0.f, 0.f);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance00);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance20);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance02);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance22);
+
+        // Pack
+        uint2 packed_radiance = HashGridCache_PackRadiance(radiance);
+        lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance;
+        g_HashGridCache_ValueBuffer[cell_index] = packed_radiance;
+    }
+
+    // MIP 3
+    GroupMemoryBarrierWithGroupSync();
+    [branch]
+    if(g_HashGridCacheConstants.size_tile_mip3 > 0 && all((group_thread_id % 8) == 0))
+    {
+        uint cell_index = HashGridCache_CellIndex(subgroup_thread_id, tile_index, 3);
+
+        // Box filter
+        uint2 packed_radiance00 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 0];
+        uint2 packed_radiance40 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 4][group_thread_id.y + 0];
+        uint2 packed_radiance04 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 0][group_thread_id.y + 4];
+        uint2 packed_radiance44 = lds_UpdateTiles_ValueBuffer[group_thread_id.x + 4][group_thread_id.y + 4];
+
+        float4 radiance = float4(0.f, 0.f, 0.f, 0.f);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance00);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance40);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance04);
+        radiance += HashGridCache_UnpackRadiance(packed_radiance44);
+
+        // Pack
+        g_HashGridCache_ValueBuffer[cell_index] = HashGridCache_PackRadiance(radiance);
+    }
+}
+
+[numthreads(64, 1, 1)]
+void ResolveCells(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_HashGridCache_VisibilityRayCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    uint visibility_index = g_HashGridCache_VisibilityRayBuffer[did];
+
+    if ((visibility_index >> 31) != 0)
+    {
+        return; // do not use filtered radiance
+    }
+
+    uint cell_index  = g_HashGridCache_VisibilityCellBuffer[visibility_index];
+    uint query_index = g_HashGridCache_VisibilityQueryBuffer[visibility_index];
+
+    float4 radiance = HashGridCache_FilteredRadiance(cell_index, false);
+
+    ScreenProbes_AccumulateRadiance(query_index, radiance.xyz / max(radiance.w, 1.0f));
+}
+
+//!
+//! World-space ReSTIR kernels.
+//!
+
+[numthreads(64, 1, 1)]
+void ClearReservoirs(in uint did : SV_DispatchThreadID)
+{
+    g_Reservoir_HashBuffer[did]      = 0;
+    g_Reservoir_HashCountBuffer[did] = 0;
+}
+
+[numthreads(64, 1, 1)]
+void GenerateReservoirs(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_HashGridCache_VisibilityCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    // Load our visibility sample
+    float4                   packed_visibility = g_HashGridCache_VisibilityBuffer[did];
+    HashGridCache_Visibility visibility        = HashGridCache_UnpackVisibility(packed_visibility);
+
+    // Reconstruct world-space position and normal
+    Instance instance  = g_InstanceBuffer[visibility.instance_index];
+    Mesh     mesh      = g_MeshBuffer[instance.mesh_index + visibility.geometry_index];
+    float4x4 transform = FetchTransform(instance.transform_index);
+
+    Vertex v0, v1, v2;
+    FetchVertices(mesh, visibility.primitive_index, v0, v1, v2);
+
+    v0.position.xyz = mul(transform, float4(v0.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+    v1.position.xyz = mul(transform, float4(v1.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+    v2.position.xyz = mul(transform, float4(v2.position.xyz, 1.0f)).xyz - g_PreViewTranslation;
+
+    v0.normal.xyz = transformDirection(v0.normal.xyz, transform);
+    v1.normal.xyz = transformDirection(v1.normal.xyz, transform);
+    v2.normal.xyz = transformDirection(v2.normal.xyz, transform);
+
+    float3   world    =                                                       interpolate(v0.position.xyz, v1.position.xyz, v2.position.xyz, visibility.barycentrics);
+    float3   normal   = (visibility.is_front_face ? 1.0f : -1.0f) * normalize(interpolate(v0.normal.xyz,   v1.normal.xyz,   v2.normal.xyz,   visibility.barycentrics));
+    Material material = g_MaterialBuffer[mesh.material_index];
+
+    // Recover the ray origin
+    uint query_index = g_HashGridCache_VisibilityQueryBuffer[did];
+    uint probe_index = ScreenProbes_GetCellAndProbeIndex(query_index).y;
+
+    uint2  seed    = ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]);
+    float  depth   = g_DepthBuffer.Load(int3(seed, 0)).x;
+    float2 uv      = (seed + 0.5f) / g_BufferDimensions;
+    float3 origin  = InverseProject(g_ViewProjectionInverse, uv, depth);
+    float2 mesh_uv = interpolate(v0.uv.xy, v1.uv.xy, v2.uv.xy, visibility.barycentrics);
+
+    // Patch the screen probes with some emissivity information:
+    // We bypass the hash-grid cache entirely here, as adding emissive information to the cells
+    // effectively enlarges the area light (due to the spatial nature of the grid) and leads to
+    // light leaks and generally poorer visuals.
+    if (g_UseDirectLighting != 0 && visibility.is_front_face && dot(material.emissivity.xyz, material.emissivity.xyz) > 0.0f)
+    {
+        MaterialEmissive emissive = MakeMaterialEmissive(material, mesh_uv);
+        ScreenProbes_AccumulateRadiance(query_index, emissive.emissive);
+
+        return; // do not continue past an emissive surface
+    }
+
+    // We can perform some temporal radiance feedback from last frame if direct lighting was
+    // evaluated.
+    // If successful, we inject the reprojected radiance into the cache so it can be re-used
+    // by neighbor vertices but bypass the filtered readback as the sample is already denoised.
+#ifdef HAS_FEEDBACK
+    if (g_UseDirectLighting != 0)
+    {
+        float4 homogeneous = mul(g_ViewProjection, float4(world, 1.0f));
+        homogeneous.xyz /= homogeneous.w;   // perspective divide
+
+        uv    = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
+        depth = homogeneous.z;
+
+        if (all(uv > 0.0f) && all(uv < 1.0f) && depth > 0.0f && depth < 1.0f)
+        {
+            float2 previous_uv = uv - g_VelocityBuffer.SampleLevel(g_NearestSampler, uv, 0.0f).xy;
+
+            if (all(previous_uv > 0.0f) && all(previous_uv < 1.0f))
+            {
+                homogeneous = mul(g_Reprojection, float4(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth, 1.0f));
+                homogeneous.z = GetLinearDepth(homogeneous.z / homogeneous.w);  // perspective divide
+
+                float  previous_depth  = GetLinearDepth(g_PreviousDepthBuffer.SampleLevel(g_NearestSampler, previous_uv, 0.0f).x);
+                float3 previous_normal = normalize(2.0f * g_PreviousNormalBuffer.SampleLevel(g_NearestSampler, previous_uv, 0.0f).xyz - 1.0f);
+
+                if (dot(previous_normal, normal) > 5e-1f && abs(previous_depth - homogeneous.z) / homogeneous.z < 5e-2f)
+                {
+                    float3 previous_lighting = g_PrevCombinedIlluminationBuffer.SampleLevel(g_NearestSampler, previous_uv, 0.0f).xyz;
+
+                    uint  cell_index         = g_HashGridCache_VisibilityCellBuffer[did];
+                    uint4 quantized_radiance = HashGridCache_QuantizeRadiance(previous_lighting);
+
+                    ScreenProbes_AccumulateRadiance(query_index, previous_lighting);
+
+                    if (dot(previous_lighting, previous_lighting) > 0.0f)
+                    {
+                        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 0], quantized_radiance.x);
+                        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 1], quantized_radiance.y);
+                        InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 2], quantized_radiance.z);
+                    }
+                    InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 3], quantized_radiance.w);
+
+                    return; // we can skip the shadow ray for this sample :)
+                }
+            }
+        }
+    }
+#endif // HAS_FEEDBACK
+
+    float3 view_direction = normalize(origin - world);
+
+    // Sample new lights
+    const float solid_angle = FOUR_PI / (kReservoir_SampleCount * 1.5f);
+    MaterialEvaluated material2 = MakeMaterialEvaluated(material, mesh_uv);
+    MaterialBRDF materialBRDF = MakeMaterialBRDF(material2);
+    Random random = MakeRandom(did, g_FrameIndex);
+    Reservoir reservoir = sampleLightListCone<kReservoir_SampleCount>(random, world, normal, view_direction, solid_angle, materialBRDF);
+
+    if (!reservoir.isValid())
+    {
+        return;
+    }
+
+    // Append our resampled shadow ray
+    uint ray_index;
+    InterlockedAdd(g_HashGridCache_VisibilityRayCountBuffer[0], 1, ray_index);
+
+    g_HashGridCache_VisibilityRayBuffer[ray_index] = did;   // compact the surviving shadow rays
+
+    // Here, we check that the ray has traversed at least a full hash cell
+    // before hitting something.
+    // If it hasn't, we bypass the filtering from the cache (although we
+    // still accumulate the contribution into the cell).
+    //
+    // This avoids possible light leaks in the following configuration:
+    //
+    //    bright area   +--------------+
+    //                  |    dark area |
+    //                  | |            |
+    //                  | x            |
+    //                  |/|            |
+    //                 /|\             |
+    //                / | eye          |
+    // bright radiance  +--------------+
+    //
+    // Here the point 'x' is reached after bouncing from the first vertex.
+    // (i.e., it is a 2nd vertex, the ones filtered through the hash grid)
+    // Because it is close to the wall and has a similar direction to the
+    // 'bright radiance' event, both vertices will share the same hash cell
+    // leading to a light leak on the bounced lighting from the inner wall.
+    //
+    // Such a scenario mostly occurs if the length of the ray connecting
+    // the 2nd vertex is less than the size of the hash cell being used.
+    // So, we detect this case and flag a bypass of the filtered readback.
+    float cell_size  = HashGridCache_GetCellSize(world);
+    float ray_length = distance(origin, world);
+
+    if (ray_length < cell_size)
+    {
+        g_HashGridCache_VisibilityRayBuffer[ray_index] |= 0x80000000u;
+    }
+
+    // Insert the reservoir into the hash table
+#ifdef USE_RESAMPLING
+    float3 b1, b2;
+    GetOrthoVectors(normal, b1, b2);
+    float2 jitter = 2.0f * random.rand2() - 1.0f;
+    jitter *= Reservoir_GetCellSize(world) * kReservoir_SpatialJitter;
+    Reservoir_InsertEntry(ray_index, world + jitter.x * b1 + jitter.y * b2);
+
+    g_Reservoir_IndirectSampleBuffer[ray_index]       = Reservoir_PackIndirectSample(origin, world);
+    g_Reservoir_IndirectSampleNormalBuffer[ray_index] = packNormal(normal);
+#endif // USE_RESAMPLING
+
+    // Write the results out to memory
+    g_Reservoir_IndirectSampleMaterialBuffer[ray_index]  = packMaterial(material2);  // cannot afford to re-fetch the full material each time, so we need to approximate it...
+    g_Reservoir_IndirectSampleReservoirBuffer[ray_index] = packReservoir(reservoir);
+}
+
+[numthreads(64, 1, 1)]
+void CompactReservoirs(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_Reservoir_HashListCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    uint4 list_element = g_Reservoir_HashListBuffer[did];
+    uint  value_index  = g_Reservoir_HashIndexBuffer[list_element.y] + list_element.z;
+
+    g_Reservoir_HashValueBuffer[value_index] = list_element.x;
+}
+
+[numthreads(64, 1, 1)]
+void ResampleReservoirs(in uint did : SV_DispatchThreadID)
+{
+    if (did >= g_HashGridCache_VisibilityRayCountBuffer[0])
+    {
+        return; // out of bounds
+    }
+
+    // Load our shading information
+    float3 origin, world;
+    Reservoir_UnpackIndirectSample(g_Reservoir_IndirectSampleBuffer[did], origin, world);
+
+    float3       normal    = unpackNormal(g_Reservoir_IndirectSampleNormalBuffer[did]);
+    MaterialBRDF material  = unpackMaterial(g_Reservoir_IndirectSampleMaterialBuffer[did]);
+    Reservoir    reservoir = unpackReservoir(g_Reservoir_IndirectSampleReservoirBuffer[did]);
+
+    Random random = MakeRandom(did, g_FrameIndex);
+
+    // Locate our hash table cell
+    float3 b1, b2;
+    GetOrthoVectors(normal, b1, b2);
+    float2 jitter = 2.0f * random.rand2() - 1.0f;
+    jitter *= Reservoir_GetCellSize(world) * kReservoir_SpatialJitter;
+    uint entry_index = Reservoir_FindPreviousEntry(world + jitter.x * b1 + jitter.y * b2);
+
+    if (entry_index == kGI10_InvalidId)
+    {
+        return; // no previous reservoir cell - temporal resampling failed :'(
+    }
+
+    uint index = g_Reservoir_PreviousHashIndexBuffer[entry_index];
+    uint count = g_Reservoir_PreviousHashCountBuffer[entry_index];
+
+    // Stochastically iterate the cell content
+    uint max_count = 4;
+    uint increment = (count + max_count - 1) / max_count;
+    uint offset    = random.randInt(increment);
+
+    // And combine the reservoirs
+    ReservoirUpdater updater = MakeReservoirUpdater(reservoir);
+    float3 view_direction = normalize(origin - world);
+    for (uint i = 0; i < count; i += increment)
+    {
+        // Load up the iterated reservoir
+        uint      reservoir_index = g_Reservoir_PreviousHashValueBuffer[index + ((i + offset) % count)];
+        Reservoir reservoir2      = unpackReservoir(g_Reservoir_PreviousIndirectSampleReservoirBuffer[reservoir_index]);
+        float3    filter_normal   = unpackNormal(g_Reservoir_PreviousIndirectSampleNormalBuffer[reservoir_index]);
+
+        if (!reservoir2.isValid())
+        {
+            continue;   // skip invalid reservoir(s)
+        }
+
+        // Bilaterally filter the neighbor reservoir
+        float bilateral_weight = max(dot(normal, filter_normal), 0.0f);
+        bilateral_weight = squared(squared(bilateral_weight)); // make it steep
+        if (bilateral_weight < kReservoir_BilateralThreshold) continue;
+
+        // And combine it with our current reservoir
+        Reservoir_ClampPrevious(reservoir, reservoir2);
+        const float solid_angle = FOUR_PI / (kReservoir_SampleCount * 12000.0f);
+        mergeReservoirs(updater, reservoir2, random, material, world, normal, view_direction, solid_angle);
+    }
+
+    if (!updater.reservoir.M)
+    {
+        return; // reprojection failed
+    }
+
+    // Finalize our reservoir
+    reservoir = getUpdatedReservoir(updater);
+
+    // And write it out to memory
+    g_Reservoir_IndirectSampleReservoirBuffer[did] = packReservoir(reservoir);
+}
+
+//!
+//! GI-1.0 denoiser kernels.
+//!
+
+[numthreads(8, 8, 1)]
+void ReprojectGI(in uint2 did : SV_DispatchThreadID)
+{
+    if (all(did == 0))
+    {
+        g_GIDenoiser_BlurSampleCountBuffer[0] = 0;
+    }
+
+    if (any(did >= g_BufferDimensions))
+    {
+        return; // out of bounds
+    }
+
+    float4 color    = g_GIDenoiser_ColorBuffer[did];
+    float4 lighting = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float3 normal   = g_DetailsBuffer.Load(int3(did, 0)).xyz;
+
+    float  alpha_blend  = 1.0f;
+    float  color_delta  = 0.0f;
+    float2 uv           = (did + 0.5f) / g_BufferDimensions;
+    bool   is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+    if (!is_sky_pixel)
+    {
+        float2 velocity    = g_VelocityBuffer.SampleLevel(g_NearestSampler, uv, 0.0f).xy;
+        float2 previous_uv = (uv - velocity);
+
+        float depth = g_DepthBuffer.Load(int3(did, 0)).x;
+        normal = 2.0f * normal - 1.0f;
+
+        if (all(previous_uv > 0.0f) && all(previous_uv < 1.0f))
+        {
+            float3 world     = InverseProject(g_GI10Constants.view_proj_inv, uv, depth);
+            float  cell_size = distance(g_Eye, world) * g_ScreenProbesConstants.cell_size;
+
+            float  weight     = 0.0f;
+            float2 texel_size = 1.0f / g_BufferDimensions;
+
+            const float kOneOverSqrtOfTwo = 0.707107f;
+
+            for (float y = -1.0f; y <= 1.0f; ++y)
+            {
+                for (float x = -1.0f; x <= 1.0f; ++x)
+                {
+                    float2 st              = previous_uv + float2(x, y) * texel_size;
+                    float4 c               = g_GIDenoiser_PreviousColorBuffer.SampleLevel(g_NearestSampler, st, 0.0f);
+                    float3 previous_normal = g_PreviousDetailsBuffer.SampleLevel(g_NearestSampler, st, 0.0f).xyz;
+
+                    if (c.w < 1.0f || dot(previous_normal, previous_normal) == 0.0f)
+                    {
+                        continue;   // skip invalid sample(s)
+                    }
+
+                    previous_normal = 2.0f * previous_normal - 1.0f;
+
+                    float  previous_depth = g_PreviousDepthBuffer.SampleLevel(g_NearestSampler, st, 0.0f).x;
+                    float3 previous_world = InverseProject(g_PreviousViewProjectionInverse, st, previous_depth);
+
+                    if (abs(dot(previous_world - world, normal)) < cell_size && dot(normal, previous_normal) > 0.95f)
+                    {
+                        float subpixel_dist = distance(floor(st * g_BufferDimensions) + 0.5f, previous_uv * g_BufferDimensions);
+                        float w             = saturate(1.0f - subpixel_dist * kOneOverSqrtOfTwo);
+
+                        color_delta += w * g_GIDenoiser_PreviousColorDeltaBuffer.SampleLevel(g_NearestSampler, st, 0.0f).x;
+                        lighting    += w * c;
+                        weight      += w;
+                    }
+                }
+            }
+
+            if (weight > 0.0f)
+            {
+                float w = sign(color_delta);
+                color_delta  = GIDenoiser_RemoveNaNs(abs(color_delta) / weight);
+                color_delta *= w;   // restore delta
+
+                lighting = GIDenoiser_RemoveNaNs(lighting / weight);
+            }
+
+            if (color.w > 0.0f)
+            {
+                float lumaA = luminance(color.xyz);
+                float lumaB = luminance(lighting.xyz / max(lighting.w, 1.0f));
+
+                color_delta = lerp(color_delta, lumaA - lumaB, 1.0f / 8.0f);    // smoothed delta
+                alpha_blend = saturate(1.0f - abs(color_delta) / max(lumaB, 1e-4f));
+            }
+        }
+    }
+
+    float blur_mask = (!is_sky_pixel ? max(8.0f - lighting.w, 0.0f) : -1.0f);
+
+    if (color.w > 0.0f || lighting.w < 1.0f)    // append new sample
+    {
+        lighting += float4(color.xyz, color.w > 0.0f ? 1.0f : -1.0f);
+    }
+
+    float2 vignette_uv      = uv * (1.0f - uv.yx);
+    float  vignette         = pow(15.0f * vignette_uv.x * vignette_uv.y, 0.25f);
+    float  max_sample_count = max(lerp(4.0f, 80.0f, alpha_blend) * vignette, 1.0f);
+
+    if (lighting.w > max_sample_count)  // evict old samples from the history
+    {
+        lighting *= (max_sample_count / lighting.w);
+    }
+
+    g_GIDenoiser_BlurMask[did]         = blur_mask / 127.0f;
+    g_GIDenoiser_ColorBuffer[did]      = lighting;
+    g_GIDenoiser_ColorDeltaBuffer[did] = color_delta;
+}
+
+[numthreads(kGIDenoiser_BlurGroupSize, kGIDenoiser_BlurGroupSize, 1)]
+void FilterBlurMask(in uint2 did : SV_DispatchThreadID, in uint2 lid : SV_GroupThreadID, in uint local_id : SV_GroupIndex, in uint2 gid : SV_GroupID)
+{
+    if (local_id == 0)
+    {
+        lds_GIDenoiser_BlurSampleCount = 0;
+    }
+
+    if (local_id < kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 4)
+    {
+        int2 anchor = int2(gid) * kGIDenoiser_BlurGroupSize - kGIDenoiser_BlurRadius;
+
+        int2 coord1 = anchor + int2( local_id % kGIDenoiser_BlurTileDim,                                                               local_id / kGIDenoiser_BlurTileDim                                                             );
+        int2 coord2 = anchor + int2((local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 4)     % kGIDenoiser_BlurTileDim, (local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 4)     / kGIDenoiser_BlurTileDim);
+        int2 coord3 = anchor + int2((local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 2)     % kGIDenoiser_BlurTileDim, (local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 2)     / kGIDenoiser_BlurTileDim);
+        int2 coord4 = anchor + int2((local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim * 3 / 4) % kGIDenoiser_BlurTileDim, (local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim * 3 / 4) / kGIDenoiser_BlurTileDim);
+
+        float blur_mask_0 = g_GIDenoiser_BlurMask[clamp(coord1, 0, int2(g_BufferDimensions) - 1)].x;
+        float blur_mask_1 = g_GIDenoiser_BlurMask[clamp(coord2, 0, int2(g_BufferDimensions) - 1)].x;
+        float blur_mask_2 = g_GIDenoiser_BlurMask[clamp(coord3, 0, int2(g_BufferDimensions) - 1)].x;
+        float blur_mask_3 = g_GIDenoiser_BlurMask[clamp(coord4, 0, int2(g_BufferDimensions) - 1)].x;
+
+        lds_GIDenoiser_BlurMask[local_id]                                                             = blur_mask_0;
+        lds_GIDenoiser_BlurMask[local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 4]     = blur_mask_1;
+        lds_GIDenoiser_BlurMask[local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 2]     = blur_mask_2;
+        lds_GIDenoiser_BlurMask[local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim * 3 / 4] = blur_mask_3;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    float2 tile_pos  = (lid + kGIDenoiser_BlurRadius + 0.5f);
+    float  blur_mask = GIDenoiser_TapBlurMask(tile_pos);    // load center value
+
+    if (blur_mask < 0.0f || any(did >= g_BufferDimensions))
+    {
+        blur_mask = 0.0f;   // sky pixel
+    }
+    else
+    {
+        float norm = 1.0f / sqrt(2.0f * squared(kGIDenoiser_BlurRadius));
+
+        for (int y = -kGIDenoiser_BlurRadius; y <= kGIDenoiser_BlurRadius; ++y)
+        {
+            for (int x = -kGIDenoiser_BlurRadius; x <= kGIDenoiser_BlurRadius; ++x)
+            {
+                if (x != 0 && y != 0)   // center element was already processed
+                {
+                    float s = GIDenoiser_TapBlurMask(tile_pos + float2(x, y));
+                    float d = sqrt(float(x * x + y * y));
+
+                    s *= saturate(1.0f - d * norm); // distance-weighted
+
+                    blur_mask = max(blur_mask, round(s));
+                }
+            }
+        }
+    }
+    InterlockedAdd(lds_GIDenoiser_BlurSampleCount, blur_mask > 0.0f ? uint(squared(2.0f * blur_mask + 1.0f)) : 0);
+    GroupMemoryBarrierWithGroupSync();
+
+    if (local_id == 0)
+    {
+        InterlockedAdd(g_GIDenoiser_BlurSampleCountBuffer[0], lds_GIDenoiser_BlurSampleCount);
+    }
+
+    g_GIDenoiser_BlurredBlurMask[did] = blur_mask;
+}
+
+[numthreads(8, 8, 1)]
+void FilterGI(in uint2 did : SV_DispatchThreadID)
+{
+    if (any(did >= g_BufferDimensions))
+    {
+        return; // out of bounds
+    }
+
+    float4 lighting    = g_GIDenoiser_PreviousColorBuffer.Load(int3(did, 0));
+    int    blur_radius = GIDenoiser_GetBlurRadius(did);
+
+    if (blur_radius > 0)
+    {
+        float  weight = 1.0f;
+        float3 color  = lighting.xyz / max(lighting.w, 1.0f);
+
+        float  center_depth  = GetLinearDepth(g_DepthBuffer.Load(int3(did, 0)).x);
+        float3 center_normal = 2.0f * g_DetailsBuffer.Load(int3(did, 0)).xyz - 1.0f;
+
+        for (int r = -blur_radius; r <= blur_radius; ++r)
+        {
+            int2   pos = clamp(int2(did) + r * g_BlurDirection, 0, int2(g_BufferDimensions) - 1);
+            float4 c   = g_GIDenoiser_PreviousColorBuffer.Load(int3(pos, 0));
+
+            if (c.w > 0.0f)
+            {
+                float  depth  = GetLinearDepth(g_DepthBuffer.Load(int3(pos, 0)).x);
+                float3 normal = 2.0f * g_DetailsBuffer.Load(int3(pos, 0)).xyz - 1.0f;
+
+                float depth_diff    = 1.0f - (center_depth / depth);
+                float depth_factor  = exp2(-(lighting.w > 0.0f ? 2e2f : 2e1f) * abs(depth_diff));
+                float normal_factor = max(dot(normal, center_normal), 0.0f);
+                normal_factor *= normal_factor; normal_factor *= normal_factor;
+
+                float  w = depth_factor * (lighting.w > 0.0f ? normal_factor : 1.0f);
+
+                color  += w * (c.xyz / max(c.w, 1.0f));
+                weight += w;
+            }
+        }
+
+        lighting.xyz = (color / weight) * max(lighting.w, 1.0f);
+    }
+
+    if (g_BlurDirection.y > 0)
+    {
+        g_IrradianceBuffer[did] = float4(lighting.xyz / max(lighting.w, 1.0f), 1.0f);
+    }
+
+    g_GIDenoiser_ColorBuffer[did] = lighting;
+}
