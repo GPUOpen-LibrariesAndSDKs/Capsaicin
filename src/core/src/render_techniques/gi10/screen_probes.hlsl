@@ -57,6 +57,7 @@ RWStructuredBuffer<uint>  g_ScreenProbes_PreviousProbeSpawnBuffer;
 
 RWStructuredBuffer<uint> g_ScreenProbes_EmptyTileBuffer;
 RWStructuredBuffer<uint> g_ScreenProbes_EmptyTileCountBuffer;
+RWStructuredBuffer<uint> g_ScreenProbes_ProbeSpawnTileCountBuffer;
 RWStructuredBuffer<uint> g_ScreenProbes_OverrideTileBuffer;
 RWStructuredBuffer<uint> g_ScreenProbes_OverrideTileCountBuffer;
 

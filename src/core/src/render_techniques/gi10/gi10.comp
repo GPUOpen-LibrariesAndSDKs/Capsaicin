@@ -186,6 +186,7 @@ void ClearCounters()
 {
     g_Reservoir_HashListCountBuffer[0] = 0; // reset counters
 
+    g_ScreenProbes_ProbeSpawnTileCountBuffer[0]                 = 0;
     g_ScreenProbes_EmptyTileCountBuffer[0]                  = 0;
     g_ScreenProbes_OverrideTileCountBuffer[0]               = 0;
     g_ScreenProbes_ProbeCachedTileLRUCountBuffer[0]         = 0;
@@ -569,7 +570,22 @@ void SpawnScreenProbes(in uint did : SV_DispatchThreadID)
 
     if (!is_sky_pixel)
     {
-        g_ScreenProbes_PreviousProbeSpawnBuffer[did] = ScreenProbes_PackSeed(seed);
+        g_ScreenProbes_ProbeSpawnBuffer[did] = ScreenProbes_PackSeed(seed);
+        uint spawn_tile_index;
+        InterlockedAdd(g_ScreenProbes_ProbeSpawnTileCountBuffer[0], 1, spawn_tile_index);
+
+        uint probe_mask  = g_ScreenProbes_ProbeMaskBuffer[seed / g_ScreenProbesConstants.probe_size];
+
+        // If we're not filling a hole from the reprojection, we can append this tile to the
+        // list of "overridable tile"; that is, this is a valid candidate to be un-spawned in
+        // favor of a disoccluded "empty tile" during the patching of the probes.
+        if (probe_mask != uint(-1))
+        {
+            uint override_tile_index;
+            InterlockedAdd(g_ScreenProbes_OverrideTileCountBuffer[0], 1, override_tile_index);
+        
+            g_ScreenProbes_OverrideTileBuffer[override_tile_index] = spawn_tile_index;
+        }
     }
 
     g_ScreenProbes_ProbeSpawnScanBuffer[did] = (!is_sky_pixel ? 1 : 0);
@@ -645,8 +661,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 {
     uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
                                * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
-    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
-                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    uint probe_count           = g_ScreenProbes_ProbeSpawnTileCountBuffer[0];
 
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
@@ -940,8 +955,7 @@ void PopulateScreenProbes(in uint did : SV_DispatchThreadID)
 {
     uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
                                * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
-    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
-                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    uint probe_count           = g_ScreenProbes_ProbeSpawnTileCountBuffer[0];
 
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  probe_index          = cell_and_probe_index.y;
@@ -1092,8 +1106,7 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
 {
     uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
                                * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
-    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
-                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    uint probe_count           = g_ScreenProbes_ProbeSpawnTileCountBuffer[0];
 
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
@@ -1282,8 +1295,7 @@ void FilterScreenProbes(in uint did : SV_DispatchThreadID)
 {
     uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
                                * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
-    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
-                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    uint probe_count           = g_ScreenProbes_ProbeSpawnTileCountBuffer[0];
 
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
@@ -1371,8 +1383,7 @@ void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : S
 {
     uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
                                * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
-    uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
-                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    uint probe_count           = g_ScreenProbes_ProbeSpawnTileCountBuffer[0];
 
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;

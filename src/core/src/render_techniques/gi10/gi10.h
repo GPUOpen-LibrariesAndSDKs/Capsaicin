@@ -147,6 +147,7 @@ protected:
         GfxBuffer      probe_spawn_scan_buffer_;
         GfxBuffer      probe_spawn_index_buffer_;
         GfxBuffer      probe_spawn_probe_buffer_;
+        GfxBuffer      probe_spawn_tile_count_buffer_;
         GfxBuffer      probe_spawn_sample_buffer_;
         GfxBuffer      probe_spawn_radiance_buffer_;
         GfxBuffer      probe_empty_tile_buffer_;

@@ -56,7 +56,8 @@ GI10::ScreenProbes::~ScreenProbes()
     gfxDestroyBuffer(gfx_, probe_spawn_scan_buffer_);
     gfxDestroyBuffer(gfx_, probe_spawn_index_buffer_);
     gfxDestroyBuffer(gfx_, probe_spawn_probe_buffer_);
-    gfxDestroyBuffer(gfx_, probe_spawn_sample_buffer_);
+    gfxDestroyBuffer(gfx_, probe_spawn_probe_buffer_);
+    gfxDestroyBuffer(gfx_, probe_spawn_tile_count_buffer_);
     gfxDestroyBuffer(gfx_, probe_spawn_radiance_buffer_);
     gfxDestroyBuffer(gfx_, probe_empty_tile_buffer_);
     gfxDestroyBuffer(gfx_, probe_empty_tile_count_buffer_);
@@ -224,6 +225,14 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(CapsaicinInternal const &capsai
 
         probe_override_tile_count_buffer_ = gfxCreateBuffer<uint32_t>(gfx_, 1);
         probe_override_tile_count_buffer_.setName("Capsaicin_ProbeOverrideTileCountBuffer");
+    }
+
+    if (!probe_spawn_tile_count_buffer_.getCount())
+    {
+        gfxDestroyBuffer(gfx_, probe_spawn_tile_count_buffer_);
+
+        probe_spawn_tile_count_buffer_ = gfxCreateBuffer<uint32_t>(gfx_, 1);
+        probe_spawn_tile_count_buffer_.setName("Capsaicin_ProbeSpawnTileCountBuffer");
     }
 
     if (probe_cached_tile_buffer_.getWidth() != probe_buffer_width
@@ -1283,6 +1292,8 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(
         gfx_, gi10_program_, "g_ScreenProbes_ProbeSpawnBuffer", screen_probes_.probe_spawn_buffers_[0]);
     gfxProgramSetParameter(
+        gfx_, gi10_program_, "g_ScreenProbes_ProbeSpawnTileCountBuffer", screen_probes_.probe_spawn_tile_count_buffer_);
+    gfxProgramSetParameter(
         gfx_, gi10_program_, "g_ScreenProbes_ProbeSpawnScanBuffer", screen_probes_.probe_spawn_scan_buffer_);
     gfxProgramSetParameter(gfx_, gi10_program_, "g_ScreenProbes_ProbeSpawnIndexBuffer",
         screen_probes_.probe_spawn_index_buffer_);
@@ -1456,8 +1467,10 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
         gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
         gfxCommandScanSum(gfx_, kGfxDataType_Uint, screen_probes_.probe_cached_tile_list_index_buffer_,
             screen_probes_.probe_cached_tile_list_count_buffer_);
+
         generateDispatch(screen_probes_.probe_cached_tile_list_element_count_buffer_,
             *gfxKernelGetNumThreads(gfx_, scatter_screen_probes_kernel_));
+
         gfxCommandBindKernel(gfx_, scatter_screen_probes_kernel_);
         gfxCommandDispatchIndirect(gfx_, dispatch_command_buffer_);
     }
@@ -1473,10 +1486,10 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
 
         gfxCommandBindKernel(gfx_, spawn_screen_probes_kernel_);
         gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
-        gfxCommandScanSum(gfx_, kGfxDataType_Uint, screen_probes_.probe_spawn_index_buffer_,
+        /*gfxCommandScanSum(gfx_, kGfxDataType_Uint, screen_probes_.probe_spawn_index_buffer_,
             screen_probes_.probe_spawn_scan_buffer_);
         gfxCommandBindKernel(gfx_, compact_screen_probes_kernel_);
-        gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
+        gfxCommandDispatch(gfx_, num_groups_x, 1, 1);*/
     }
 
     // Stochastically patch the overridable tiles using empty ones (a.k.a., adaptive sampling)
