@@ -186,7 +186,7 @@ bool GPUReduce::reduceInternal(
     if (numGroups1 > 1 && numGroups2 > 1)
     {
         // Create scratch buffer needed for loops
-        const uint64_t typeSize          = ((uint32_t)currentType % 4) * sizeof(float);
+        const uint64_t typeSize          = ((uint32_t)currentType % 4 + 1) * sizeof(float);
         const uint64_t scratchBufferSize = maxNumKeys * typeSize;
         if (!scratchBuffer || (scratchBuffer.getSize() < scratchBufferSize))
         {
