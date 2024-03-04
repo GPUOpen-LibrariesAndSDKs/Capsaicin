@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -109,7 +109,6 @@ struct hash<GfxMesh>
     {
         size_t hash = 0x12345678u;
 
-        Capsaicin::HashCombine(hash, (uint64_t)value.material);
         Capsaicin::HashCombine(hash, value.bounds_min);
         Capsaicin::HashCombine(hash, value.bounds_max);
         Capsaicin::HashCombine(hash, value.vertices.size());
@@ -127,6 +126,7 @@ struct hash<GfxInstance>
         size_t hash = 0x12345678u;
 
         Capsaicin::HashCombine(hash, (uint64_t)value.mesh);
+        Capsaicin::HashCombine(hash, (uint64_t)value.material);
         Capsaicin::HashCombine(hash, value.transform);
 
         return hash;

@@ -1,0 +1,13 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "scene_viewer.exe (bin\\scene_viewer.exe)",
+      "name": "scene_viewer.exe (bin\\scene_viewer.exe)",
+      "currentDir": "${workspaceRoot}"
+    }
+  ]
+}

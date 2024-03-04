@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -44,11 +44,17 @@ public:
     };
 
     /**
-     * Convert render settings to internal options format.
-     * @param settings Current render settings.
+     * Convert render options to internal options format.
+     * @param options Current render options.
      * @returns The options converted.
      */
-    static RenderOptions convertOptions(RenderSettings const &settings) noexcept;
+    static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
+
+    /**
+     * Gets a list of any shared components used by the current render technique.
+     * @return A list of all supported components.
+     */
+    ComponentList getComponents() const noexcept override;
 
     /**
      * Gets the required list of AOVs needed for the current render technique.
@@ -71,9 +77,18 @@ public:
      */
     void render(CapsaicinInternal &capsaicin) noexcept override;
 
-private:
-    void terminate();
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    void terminate() noexcept override;
 
+    /**
+     * Render GUI options.
+     * @param [in,out] capsaicin The current capsaicin context.
+     */
+    void renderGUI(CapsaicinInternal &capsaicin) const noexcept override;
+
+private:
     RenderOptions options;
 
     GfxKernel  tone_mapping_kernel_;

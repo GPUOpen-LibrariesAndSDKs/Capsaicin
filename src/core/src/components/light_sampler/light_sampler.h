@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,133 +21,65 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
+#include "capsaicin_internal_types.h"
 #include "components/component.h"
+#include "factory.h"
 
 namespace Capsaicin
 {
-class LightSampler : public Component::RegistrarName<LightSampler>
+class CapsaicinInternal;
+
+class LightSampler : public Component
 {
+    LightSampler(LightSampler const &)            = delete;
+    LightSampler &operator=(LightSampler const &) = delete;
+
 public:
-    static constexpr std::string_view Name = "LightSampler";
-
-    /** Constructor. */
-    LightSampler() noexcept {}
-
-    LightSampler(LightSampler const &) noexcept = delete;
-
-    LightSampler(LightSampler &&) noexcept = default;
-
-    /** Destructor. */
-    virtual ~LightSampler() noexcept;
-
-    /*
-     * Gets configuration options for current technique.
-     * @return A list of all valid configuration options.
-     */
-    RenderOptionList getRenderOptions() noexcept;
-
-    struct RenderOptions
-    {
-        bool delta_light_enable       = true; /**< True to enable delta light in light sampling */
-        bool area_light_enable        = false; /**< True to enable area lights in light sampling */
-        bool environment_light_enable = true; /**< True to enable environment lights in light sampling */
-    };
-
-    /**
-     * Convert render settings to internal options format.
-     * @param settings Current render settings.
-     * @returns The options converted.
-     */
-    static RenderOptions convertOptions(RenderSettings const &settings) noexcept;
-
-    /**
-     * Initialise any internal data or state.
-     * @note This is automatically called by the framework after construction and should be used to create
-     * any required CPU|GPU resources.
-     * @param capsaicin Current framework context.
-     * @returns True if initialisation succeeded, False otherwise.
-     */
-    bool init(CapsaicinInternal const &capsaicin) noexcept override;
-
-    /**
-     * Run internal operations.
-     * @param [in,out] capsaicin Current framework context.
-     */
-    void run(CapsaicinInternal &capsaicin) noexcept override;
+    using Component::Component;
+    using Component::getBuffers;
+    using Component::getComponents;
+    using Component::getRenderOptions;
+    using Component::init;
+    using Component::renderGUI;
+    using Component::run;
+    using Component::terminate;
 
     /**
      * Check to determine if any kernels using light sampler code need to be (re)compiled.
      * @param capsaicin Current framework context.
-     * @returns True if an update occurred requiring internal updates to be performed.
+     * @return True if an update occurred requiring internal updates to be performed.
      */
-    virtual bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept;
+    virtual bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
-     * Get the list of shader defines that should be passed to any kernel that uses the lightSampler.
+     * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
      * @param capsaicin Current framework context.
-     * @returns A vector with each required define.
+     * @return A vector with each required define.
      */
-    virtual std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept;
+    virtual std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
      * Add the required program parameters to a shader based on current settings.
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    virtual void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
-
-    /**
-     * Gets count of enabled area lights in current scene.
-     * @returns The area light count.
-     */
-    uint32_t getAreaLightCount() const;
-
-    /**
-     * Gets count of enabled delta lights (point,spot,direction) in current scene.
-     * @returns The delta light count.
-     */
-    uint32_t getDeltaLightCount() const;
-
-    /**
-     * Gets approximate light count within the light buffer.
-     * The light count is a maximum upper bound of possible lights in the light list. Since lights are culled
-     * on the GPU it takes several frames for the exact value to be read back.
-     * This should not be used in ant shader operations as @getLightCountBuffer() should be used instead.
-     * @returns The light count.
-     */
-    uint32_t getLightCount() const;
+    virtual void addProgramParameters(
+        CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept = 0;
 
     /**
      * Check if the scenes lighting data was changed this frame.
+     * @param capsaicin Current framework context.
      * @returns True if light data has changed.
      */
-    bool getLightsUpdated() const;
+    virtual bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
-     * Check if the light settings have changed (i.e. enabled/disabled lights).
-     * @returns True if light settings have changed.
+     * Get the name of the header file used in HLSL code to include necessary sampler functions.
+     * @return String name of the HLSL header include.
      */
-    bool getLightSettingsUpdated() const;
-
-private:
-    RenderOptions options;
-
-    uint32_t areaLightTotal      = 0; /**< Number of area lights in meshes (may not be all enabled) */
-    size_t   lightHash           = 0;
-    uint32_t areaLightMaxCount   = 0; /**< Max number of area lights in light buffer */
-    uint32_t areaLightCount      = 0; /**< Approximate number of area lights in light buffer */
-    uint32_t deltaLightCount     = 0; /**< Number of delta lights in light buffer */
-    uint32_t environmentMapCount = 0; /**< Number of environment map lights in buffer */
-
-    bool lightsUpdated       = true;
-    bool lightSettingChanged = true;
-
-    GfxBuffer lightBuffer;      /**< Buffer used to hold all light list */
-    GfxBuffer lightCountBuffer; /**< Buffer used to hold number of lights in light buffer */
-    std::vector<std::pair<uint32_t, GfxBuffer>>
-        lightCountBufferTemp; /**< Buffer used to copy light count into cpu memory */
-
-    GfxKernel  gatherAreaLightsKernel;
-    GfxProgram gatherAreaLightsProgram;
+    virtual std::string_view getHeaderFile() const noexcept = 0;
 };
+
+class LightSamplerFactory : public Factory<LightSampler>
+{};
 } // namespace Capsaicin

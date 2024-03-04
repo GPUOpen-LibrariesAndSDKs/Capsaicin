@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,7 +21,6 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
-#include "capsaicin.h"
 #include "capsaicin_internal_types.h"
 #include "components/component.h"
 
@@ -88,6 +87,17 @@ public:
      * @param [in,out] capsaicin The current capsaicin context.
      */
     virtual void render(CapsaicinInternal &capsaicin) noexcept = 0;
+
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    virtual void terminate() noexcept = 0;
+
+    /**
+     * Render GUI options.
+     * @param [in,out] capsaicin The current capsaicin context.
+     */
+    virtual void renderGUI(CapsaicinInternal &capsaicin) const noexcept;
 
 protected:
 };

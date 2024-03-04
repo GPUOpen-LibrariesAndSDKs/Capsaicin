@@ -21,6 +21,8 @@ There are several ways to get started compiling the source code:
 	- Use CMake to generate a Visual Studio project
 	- `cmake CMakeLists.txt -B ./build -G "Visual Studio 17 2022"` (note other Visual Studio versions can be used)
 	- Open the newly created project in Visual Studio and build as normal
+- Open directly in VS Code or Visual Studio
+	- Both VS Code and newer versions of Visual Studio enable loading CMake projects directly (see corresponding documentation for your IDE)
 - Build on command line
 	- `cmake -S ./ -B ./build -A x64`
 	- `cmake --build ./build --config RelWithDebInfo`
@@ -31,7 +33,7 @@ Code is separated by functionality with the expectation that files (i.e. headers
 
 All source code is written using C++ and uses the `.cpp` file extension. Header files use the `.h` extension. This extension is also used for any files shared between host and device code. All device code uses the `.hlsl` extension.
 
-- `assets` : Contains bundled test scenes
+- `assets` : Contains bundled test scenes and associated data
 - `docs` : Contains the documentation
 - `dump` : The default location for saved screenshots
 - `shader_pdb` : The default location for saved shader debugging information
@@ -40,11 +42,11 @@ All source code is written using C++ and uses the `.cpp` file extension. Header 
 		- `include` : Contains the single `capsaicin.h` header file used to interface with the framework
 		- `src`
 			- `capsaicin` : Contains the main internal framework code
+			- `components` : The location of all available components (each within its own sub-folder)
 			- `lights` : Common HLSL headers for lighting evaluation/sampling
 			- `materials` : Common HLSL headers for material evaluation/sampling
 			- `math` : Common mathematical helper functions
-			- `random` : Random number generators
-			- `render_technique` : The location of all available render techniques (each within its own sub-folder)
+			- `render_techniques` : The location of all available render techniques (each within its own sub-folder)
 			- `renderers` : All available renderers (each within its own sub-folder)
 			- `utilities` : Reusable host side utility helpers (sort, reduce etc.)
 	- `scene_viewer` : The default application
@@ -74,3 +76,7 @@ Available controls:
 `Mouse Wheel (Horizontal)` - Change Field of View
 
 `Space` - Pause/Resume animations
+`Left` - Step animation back 1 frame
+`Right` - Step animation forward 1 frame
+`Up` - Increase playback speed
+`Down` - Decrease playback speed

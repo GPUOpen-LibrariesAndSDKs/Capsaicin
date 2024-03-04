@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -72,14 +72,14 @@ void setupIndirectParameters(uint localID : SV_GroupThreadID)
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void count(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-	// Call the uint version of the count part of the algorithm
+    // Call the uint version of the count part of the algorithm
     FFX_ParallelSort_Count_uint(localID, groupID, CBuffer[0], CShiftBit, SrcBuffer, SumTable);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void countReduce(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-	// Call the reduce part of the algorithm
+    // Call the reduce part of the algorithm
     FFX_ParallelSort_ReduceCount(localID, groupID, CBuffer[0], SumTable, ReduceTable);
 }
 
@@ -88,24 +88,24 @@ void scan(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
     uint BaseIndex = FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE * groupID;
     FFX_ParallelSort_ScanPrefix(CBuffer[0].NumScanValues, localID, groupID, 0, BaseIndex, false,
-								CBuffer[0], ScanSrc, ScanDst, ScanScratch);
+                                CBuffer[0], ScanSrc, ScanDst, ScanScratch);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void scanAdd(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-	// When doing adds, we need to access data differently because reduce
-	// has a more specialized access pattern to match optimized count
-	// Access needs to be done similarly to reduce
-	// Figure out what bin data we are reducing
+    // When doing adds, we need to access data differently because reduce
+    // has a more specialized access pattern to match optimized count
+    // Access needs to be done similarly to reduce
+    // Figure out what bin data we are reducing
     uint BinID = groupID / CBuffer[0].NumReduceThreadgroupPerBin;
     uint BinOffset = BinID * CBuffer[0].NumThreadGroups;
 
-	// Get the base index for this thread group
+    // Get the base index for this thread group
     uint BaseIndex = (groupID % CBuffer[0].NumReduceThreadgroupPerBin) * FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE;
 
     FFX_ParallelSort_ScanPrefix(CBuffer[0].NumThreadGroups, localID, groupID, BinOffset, BaseIndex, true,
-								CBuffer[0], ScanSrc, ScanDst, ScanScratch);
+                                CBuffer[0], ScanSrc, ScanDst, ScanScratch);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
@@ -117,5 +117,12 @@ void scatter(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void scatterPayload(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-    Payload::FFX_ParallelSort_Scatter_uint(localID, groupID, CBuffer[0], CShiftBit, SrcBuffer, DstBuffer, SumTable, SrcPayload, DstPayload);
+    Payload::FFX_ParallelSortCB PayloadCBuffer;
+    PayloadCBuffer.NumKeys = CBuffer[0].NumKeys;
+    PayloadCBuffer.NumBlocksPerThreadGroup = CBuffer[0].NumBlocksPerThreadGroup;
+    PayloadCBuffer.NumThreadGroups = CBuffer[0].NumThreadGroups;
+    PayloadCBuffer.NumThreadGroupsWithAdditionalBlocks = CBuffer[0].NumThreadGroupsWithAdditionalBlocks;
+    PayloadCBuffer.NumReduceThreadgroupPerBin = CBuffer[0].NumReduceThreadgroupPerBin;
+    PayloadCBuffer.NumScanValues = CBuffer[0].NumScanValues;
+    Payload::FFX_ParallelSort_Scatter_uint(localID, groupID, PayloadCBuffer, CShiftBit, SrcBuffer, DstBuffer, SumTable, SrcPayload, DstPayload);
 }

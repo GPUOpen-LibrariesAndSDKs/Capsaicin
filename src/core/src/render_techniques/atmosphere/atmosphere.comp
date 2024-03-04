@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,7 +19,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
+
 #include "atmosphere.hlsl"
+#include "../../math/transform.hlsl"
 
 float3   g_Eye;
 uint     g_FaceIndex;
@@ -41,11 +43,10 @@ void DrawAtmosphere(in uint2 did : SV_DispatchThreadID)
     float2 uv  = (did + 0.5f) / g_BufferDimensions;
     float2 ndc = 2.0f * uv - 1.0f;
 
-    float4 world = mul(g_ViewProjectionInverse, float4(ndc, 1.0f, 1.0f));
-    world /= world.w;   // perspective divide
+    float3 world = transformPointProjection(float3(ndc, 1.0f), g_ViewProjectionInverse);
 
     float3 ray_origin    = g_Eye;
-    float3 ray_direction = normalize(world.xyz - g_Eye);
+    float3 ray_direction = normalize(world - g_Eye);
     float  ray_length    = 1e9f;
 
     float t = g_FrameIndex / 360.0f;

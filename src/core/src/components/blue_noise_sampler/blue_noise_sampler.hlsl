@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -52,6 +52,18 @@ float samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(in in
     return (0.5f + value) / 256.0f;
 }
 
+float BlueNoise_Sample1D(in uint2 pixel, in uint sample_index, in uint dimension_offset)
+{
+    // https://blog.demofox.org/2017/10/31/animating-noise-for-integration-over-time/
+    float s = samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(pixel.x, pixel.y, 0, dimension_offset);
+
+    return fmod(s + (sample_index & 255) * GOLDEN_RATIO, 1.0f);
+}
+
+float BlueNoise_Sample1D(in uint2 pixel, in uint sample_index)
+{
+    return BlueNoise_Sample1D(pixel, sample_index, 0);
+}
 
 float2 BlueNoise_Sample2D(in uint2 pixel, in uint sample_index, in uint dimension_offset)
 {
@@ -65,6 +77,21 @@ float2 BlueNoise_Sample2D(in uint2 pixel, in uint sample_index, in uint dimensio
 float2 BlueNoise_Sample2D(in uint2 pixel, in uint sample_index)
 {
     return BlueNoise_Sample2D(pixel, sample_index, 0);
+}
+
+float3 BlueNoise_Sample3D(in uint2 pixel, in uint sample_index, in uint dimension_offset)
+{
+    // https://blog.demofox.org/2017/10/31/animating-noise-for-integration-over-time/
+    float3 s = float3(samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(pixel.x, pixel.y, 0, dimension_offset + 0),
+                      samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(pixel.x, pixel.y, 0, dimension_offset + 1),
+                      samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(pixel.x, pixel.y, 0, dimension_offset + 2));
+
+    return fmod(s + (sample_index & 255) * GOLDEN_RATIO, 1.0f);
+}
+
+float3 BlueNoise_Sample3D(in uint2 pixel, in uint sample_index)
+{
+    return BlueNoise_Sample3D(pixel, sample_index, 0);
 }
 
 #endif // BLUE_NOISE_SAMPLER_HLSL

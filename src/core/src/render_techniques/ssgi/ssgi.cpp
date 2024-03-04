@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -34,9 +34,7 @@ SSGI::SSGI()
 
 SSGI::~SSGI()
 {
-    destroyStaticResources();
-    destroyBuffers();
-    destroyKernels();
+    terminate();
 }
 
 RenderOptionList SSGI::getRenderOptions() noexcept
@@ -50,14 +48,14 @@ RenderOptionList SSGI::getRenderOptions() noexcept
     return newOptions;
 }
 
-SSGI::RenderOptions SSGI::convertOptions(RenderSettings const &settings) noexcept
+SSGI::RenderOptions SSGI::convertOptions(RenderOptionList const &options) noexcept
 {
     RenderOptions newOptions;
-    RENDER_OPTION_GET(ssgi_slice_count_, newOptions, settings.options_)
-    RENDER_OPTION_GET(ssgi_step_count_, newOptions, settings.options_)
-    RENDER_OPTION_GET(ssgi_view_radius_, newOptions, settings.options_)
-    RENDER_OPTION_GET(ssgi_falloff_range_, newOptions, settings.options_)
-    RENDER_OPTION_GET(ssgi_unroll_kernel_, newOptions, settings.options_)
+    RENDER_OPTION_GET(ssgi_slice_count_, newOptions, options)
+    RENDER_OPTION_GET(ssgi_step_count_, newOptions, options)
+    RENDER_OPTION_GET(ssgi_view_radius_, newOptions, options)
+    RENDER_OPTION_GET(ssgi_falloff_range_, newOptions, options)
+    RENDER_OPTION_GET(ssgi_unroll_kernel_, newOptions, options)
     return newOptions;
 }
 
@@ -77,7 +75,7 @@ AOVList SSGI::getAOVs() const noexcept
     aovs.push_back({"NearFieldGlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
 
     aovs.push_back({"VisibilityDepth"});
-    aovs.push_back({"Normal"});
+    aovs.push_back({"ShadingNormal"});
     aovs.push_back({"PrevCombinedIllumination"});
     return aovs;
 }
@@ -101,10 +99,9 @@ bool SSGI::init(CapsaicinInternal const &capsaicin) noexcept
 void SSGI::render(CapsaicinInternal &capsaicin) noexcept
 {
     // BE CAREFUL: Used for rendering current frame and initializing next frame
-    auto const &render_settings    = capsaicin.getRenderSettings();
-    auto const  options            = convertOptions(render_settings);
-    auto        blue_noise_sampler = capsaicin.getComponent<BlueNoiseSampler>();
-    auto        stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
+    auto const options            = convertOptions(capsaicin.getOptions());
+    auto       blue_noise_sampler = capsaicin.getComponent<BlueNoiseSampler>();
+    auto       stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
 
     options_ = options;
 
@@ -154,8 +151,9 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
     stratified_sampler->addProgramParameters(capsaicin, ssgi_program_);
 
     gfxProgramSetParameter(gfx_, ssgi_program_, "g_SSGIConstants", ssgi_constant_buffer);
-    gfxProgramSetParameter(gfx_, ssgi_program_, "g_DepthBuffer", capsaicin.getAOVBuffer("Depth"));
-    gfxProgramSetParameter(gfx_, ssgi_program_, "g_NormalBuffer", capsaicin.getAOVBuffer("Details"));
+    gfxProgramSetParameter(gfx_, ssgi_program_, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+    gfxProgramSetParameter(
+        gfx_, ssgi_program_, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
     gfxProgramSetParameter(
         gfx_, ssgi_program_, "g_LightingBuffer", capsaicin.getAOVBuffer("PrevCombinedIllumination"));
     gfxProgramSetParameter(gfx_, ssgi_program_, "g_OcclusionAndBentNormalBuffer",
@@ -178,7 +176,7 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
     }
 
     // Debug modes
-    if (render_settings.debug_view_ == "Occlusion")
+    if (capsaicin.getCurrentDebugView() == "Occlusion")
     {
         GfxCommandEvent const command_event(gfx_, "Debug Occlusion");
 
@@ -196,7 +194,7 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
         gfxCommandBindKernel(gfx_, debug_occlusion_kernel_);
         gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
     }
-    else if (render_settings.debug_view_ == "BentNormal")
+    else if (capsaicin.getCurrentDebugView() == "BentNormal")
     {
         GfxCommandEvent const command_event(gfx_, "Debug Bent Normal");
 
@@ -219,7 +217,14 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
     gfxDestroyBuffer(gfx_, ssgi_constant_buffer);
 }
 
-void SSGI::initializeStaticResources(CapsaicinInternal const &capsaicin)
+void SSGI::terminate() noexcept
+{
+    destroyStaticResources();
+    destroyBuffers();
+    destroyKernels();
+}
+
+void SSGI::initializeStaticResources([[maybe_unused]] CapsaicinInternal const &capsaicin)
 {
     point_sampler_ = gfxCreateSamplerState(gfx_, D3D12_FILTER_MIN_MAG_MIP_POINT,
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
@@ -271,9 +276,7 @@ void SSGI::destroyStaticResources()
     gfxDestroySamplerState(gfx_, point_sampler_);
 }
 
-void SSGI::destroyBuffers()
-{
-}
+void SSGI::destroyBuffers() {}
 
 void SSGI::destroyKernels()
 {

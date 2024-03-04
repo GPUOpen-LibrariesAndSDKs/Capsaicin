@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,17 +25,19 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class BlueNoiseSampler : public Component::RegistrarName<BlueNoiseSampler>
+class BlueNoiseSampler
+    : public Component
+    , public ComponentFactory::Registrar<BlueNoiseSampler>
 {
 public:
     static constexpr std::string_view Name = "BlueNoiseSampler";
 
-    /** Constructor. */
-    BlueNoiseSampler() noexcept {}
-
     BlueNoiseSampler(BlueNoiseSampler const &) noexcept = delete;
 
     BlueNoiseSampler(BlueNoiseSampler &&) noexcept = default;
+
+    /** Constructor. */
+    BlueNoiseSampler() noexcept;
 
     /** Destructor. */
     virtual ~BlueNoiseSampler() noexcept;
@@ -54,6 +56,11 @@ public:
      * @param [in,out] capsaicin Current framework context.
      */
     void run(CapsaicinInternal &capsaicin) noexcept override;
+
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    void terminate() noexcept override;
 
     /**
      * Add the required program parameters to a shader based on current settings.

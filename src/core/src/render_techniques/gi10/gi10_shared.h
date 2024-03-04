@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,10 @@ THE SOFTWARE.
 #define GI10_SHARED_H
 
 #include "../../gpu_shared.h"
+
+#ifdef __cplusplus
+using namespace Capsaicin;
+#endif
 
 enum ScreenProbesDebugModes
 {
@@ -54,6 +58,7 @@ enum HashGridCacheDebugMode
 struct HashGridCacheConstants
 {
     float                  cell_size;
+    float                  min_cell_size;
     float                  tile_size;
     float                  tile_cell_ratio; // tile_size / cell_size
     uint                   num_buckets;
@@ -78,7 +83,15 @@ struct HashGridCacheConstants
     uint                   debug_mip_level;
     uint                   debug_propagate;
     uint                   debug_max_cell_decay;
+    uint                   debug_bucket_occupancy_histogram_size;
+    uint                   debug_bucket_overflow_histogram_size;
     HashGridCacheDebugMode debug_mode;
+};
+
+enum HashGridBufferNamesFloat
+{
+    HASHGRIDCACHE_STATSBUFFER,
+    HASHGRID_FLOAT_BUFFER_COUNT
 };
 
 enum HashGridBufferNamesUint
@@ -98,6 +111,11 @@ enum HashGridBufferNamesUint
     HASHGRIDCACHE_PACKEDTILECOUNTBUFFER1,
     HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0,
     HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1,
+    HASHGRIDCACHE_BUCKETOCCUPANCYBUFFER,
+    HASHGRIDCACHE_BUCKETOVERFLOWCOUNTBUFFER,
+    HASHGRIDCACHE_BUCKETOVERFLOWBUFFER,
+    HASHGRIDCACHE_FREEBUCKETBUFFER,
+    HASHGRIDCACHE_USEDBUCKETBUFFER,
     HASHGRID_UINT_BUFFER_COUNT
 };
 
@@ -114,14 +132,27 @@ enum HashGridBufferNamesFloat4
     HASHGRID_FLOAT4_BUFFER_COUNT
 };
 
+enum GI10DebugMode
+{
+    GI10_DEBUG_MATERIAL_ALBEDO = 0,
+    GI10_DEBUG_MATERIAL_METALLICITY,
+    GI10_DEBUG_MATERIAL_ROUGHNESS
+};
+
 struct GI10Constants
 {
-    float4x4 view_proj;
-    float4x4 view_proj_prev;
-    float4x4 view_proj_inv;
-    float4x4 view_proj_inv_prev;
-    float4x4 reprojection;
-    float4x4 view_inv;
+    float4x4                        view_proj;
+    float4x4                        view_proj_prev;
+    float4x4                        view_proj_inv;
+    float4x4                        view_proj_inv_prev;
+    float4x4                        reprojection;
+    GpuVirtualAddressRange          ray_generation_shader_record;
+    GpuVirtualAddressRangeAndStride miss_shader_table;
+    uint2                           padding0;
+    GpuVirtualAddressRangeAndStride hit_group_table;
+    uint2                           padding1;
+    GpuVirtualAddressRangeAndStride callable_shader_table;
+    uint                            padding2;
 };
 
 struct WorldSpaceReSTIRConstants
@@ -130,6 +161,51 @@ struct WorldSpaceReSTIRConstants
     uint  num_cells;
     uint  num_entries_per_cell;
     uint  unused_padding;
+};
+
+struct GlossyReflectionsConstants
+{
+    int2  full_res;
+    int   full_radius;
+    int   half_radius;
+    int   mark_fireflies_half_radius;
+    int   mark_fireflies_full_radius;
+    float mark_fireflies_half_low_threshold;
+    float mark_fireflies_full_low_threshold;
+    float mark_fireflies_half_high_threshold;
+    float mark_fireflies_full_high_threshold;
+    int   cleanup_fireflies_half_radius;
+    int   cleanup_fireflies_full_radius;
+    float low_roughness_threshold;
+    float high_roughness_threshold;
+    uint  half_res;
+    uint  padding;
+};
+
+struct GlossyReflectionsAtrousConstants
+{
+    int ping_pong;
+    int full_step;
+    int pass_index;
+};
+
+enum GlossyReflectionsNamesFloat
+{
+    GLOSSY_REFLECTION_FIREFLIES_BUFFER = 0,
+    GLOSSY_REFLECTION_TEXTURE_FLOAT_COUNT
+};
+
+enum GlossyReflectionsNamesFloat4
+{
+    GLOSSY_REFLECTION_SPECULAR_BUFFER = 0,
+    GLOSSY_REFLECTION_DIRECTION_BUFFER,
+    GLOSSY_REFLECTION_REFLECTION_BUFFER,
+    GLOSSY_REFLECTION_STANDARD_DEV_BUFFER,
+    GLOSSY_REFLECTION_REFLECTIONS_BUFFER_0,     //
+    GLOSSY_REFLECTION_REFLECTIONS_BUFFER_1,     // BE CAREFUL: keep 0 and 1 contiguous in memory for ping pong
+    GLOSSY_REFLECTION_AVERAGE_SQUARED_BUFFER_0, //
+    GLOSSY_REFLECTION_AVERAGE_SQUARED_BUFFER_1, //
+    GLOSSY_REFLECTION_TEXTURE_FLOAT4_COUNT
 };
 
 #endif

@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -123,8 +123,8 @@ class StratifiedSampler
     {
         dimension = (dimension <= 62) ? dimension : 0;
         uint val = NoExport::stochasticSobol(index, seed, ++dimension, 64);
-        // Note: Uses 4294967808 instead of 2^32 in order to ensure [0.0, 1.0) mapping due to floating point rounding error.
-        float ret = (float)val * (1.0f / 4294967808.0f);
+        // Note: Use the upper 24 bits to avoid a bias due to floating point rounding error.
+        float ret = (float)(val >> 8) * 0x1.0p-24f;
         return ret;
     }
 
@@ -138,7 +138,7 @@ class StratifiedSampler
         // Get next Sobol values
         uint val0 = NoExport::stochasticSobol(index, seed, ++dimension, 64);
         uint val1 = NoExport::stochasticSobol(index, seed, ++dimension, 64);
-        return float2(val0, val1) * (1.0f / 4294967808.0f).xx;
+        return float2(val0 >> 8, val1 >> 8) * 0x1.0p-24f.xx;
     }
 
     /**
@@ -152,7 +152,7 @@ class StratifiedSampler
         uint val0 = NoExport::stochasticSobol(index, seed, ++dimension, 64);
         uint val1 = NoExport::stochasticSobol(index, seed, ++dimension, 64);
         uint val2 = NoExport::stochasticSobol(index, seed, ++dimension, 64);
-        return float3(val0, val1, val2) * (1.0f / 4294967808.0f).xxx;
+        return float3(val0 >> 8, val1 >> 8, val2 >> 8) * 0x1.0p-24f.xxx;
     }
 };
 
@@ -217,7 +217,7 @@ class StratifiedSampler1D
     float rand()
     {
         uint val = randInt();
-        float ret = (float)val * (1.0f / 4294967808.0f);
+        float ret = (float)(val >> 8) * 0x1.0p-24f;
         return ret;
     }
 };
@@ -276,7 +276,7 @@ class StratifiedSampler2D
         // Get next Sobol values
         uint val0 = NoExport::stochasticSobol(index, seed, dimension, 2);
         uint val1 = NoExport::stochasticSobol(index++, seed, dimension + 1, 2);
-        return float2(val0, val1) * (1.0f / 4294967808.0f).xx;
+        return float2(val0 >> 8, val1 >> 8) * 0x1.0p-24f.xx;
     }
 };
 

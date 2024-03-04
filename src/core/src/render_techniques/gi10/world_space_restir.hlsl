@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -70,10 +70,10 @@ uint2 Reservoir_GetIndexAndHash(in float3 position)
     uint log_step_multiplier = uint(log2(1e3f * cell_size_step));
     float cell_size = 1e-3f * exp2(log_step_multiplier);
     int3 c = int3(floor(position / cell_size));
-    index_and_hash.x = pcg(log_step_multiplier +
-                       pcg(c.x + pcg(c.y + pcg(c.z))));
-    index_and_hash.y = xxhash32(log_step_multiplier +
-                       xxhash32(c.x + xxhash32(c.y + xxhash32(c.z))));
+    index_and_hash.x = pcgHash(log_step_multiplier +
+                       pcgHash(c.x + pcgHash(c.y + pcgHash(c.z))));
+    index_and_hash.y = xxHash(log_step_multiplier +
+                       xxHash(c.x + xxHash(c.y + xxHash(c.z))));
     index_and_hash.x = (index_and_hash.x % g_WorldSpaceReSTIRConstants.num_cells);
     index_and_hash.y = max(index_and_hash.y, 1);
     return index_and_hash;
@@ -88,10 +88,10 @@ uint2 Reservoir_GetPreviousIndexAndHash(in float3 position)
     uint log_step_multiplier = uint(log2(1e3f * cell_size_step));
     float cell_size = 1e-3f * exp2(log_step_multiplier);
     int3 c = int3(floor(position / cell_size));
-    index_and_hash.x = pcg(log_step_multiplier +
-                       pcg(c.x + pcg(c.y + pcg(c.z))));
-    index_and_hash.y = xxhash32(log_step_multiplier +
-                       xxhash32(c.x + xxhash32(c.y + xxhash32(c.z))));
+    index_and_hash.x = pcgHash(log_step_multiplier +
+                       pcgHash(c.x + pcgHash(c.y + pcgHash(c.z))));
+    index_and_hash.y = xxHash(log_step_multiplier +
+                       xxHash(c.x + xxHash(c.y + xxHash(c.z))));
     index_and_hash.x = (index_and_hash.x % g_WorldSpaceReSTIRConstants.num_cells);
     index_and_hash.y = max(index_and_hash.y, 1);
     return index_and_hash;
@@ -166,60 +166,6 @@ void Reservoir_UnpackIndirectSample(in float4 packed_indirect_sample, out float3
 
     origin       = f16tof32(packed_origin).xyz;
     hit_position = f16tof32(packed_hit_position).xyz;
-}
-
-uint packMaterial(MaterialEvaluated material)
-{
-#ifdef DISABLE_SPECULAR_LIGHTING
-    // Pack albedo color onto 10-10-10 format, i.e. 30 bits
-    uint packed_albedo = (uint(pow(saturate(material.albedo.x), 1.0f / 2.2f) * 1023.0f) << 20)
-                       | (uint(pow(saturate(material.albedo.y), 1.0f / 2.2f) * 1023.0f) << 10)
-                       | (uint(pow(saturate(material.albedo.z), 1.0f / 2.2f) * 1023.0f));
-    return packed_albedo;
-#else
-    // Pack albedo color onto 5-6-5 format, i.e. 16 bits
-    uint packed_albedo = (uint(pow(saturate(material.albedo.x), 1.0f / 2.2f) * 31.0f) << 11)
-                       | (uint(pow(saturate(material.albedo.y), 1.0f / 2.2f) * 63.0f) << 5)
-                       | (uint(pow(saturate(material.albedo.z), 1.0f / 2.2f) * 31.0f) << 0);
-
-    // Pack metallicity and roughness onto 8 bits each
-    uint packed_metallicity_roughness = (uint(saturate(material.metallicity) * 255.0f) << 8)
-                                      | (uint(saturate(material.roughness) * 255.0f) << 0);
-
-    return (packed_albedo << 16) | packed_metallicity_roughness;
-#endif
-}
-
-MaterialBRDF unpackMaterial(in uint packed_material)
-{
-    MaterialBRDF material;
-
-#ifdef DISABLE_SPECULAR_LIGHTING
-    // Unpack the albedo
-    material.albedo = float3(
-        pow(((packed_material >> 20) & 0x3FFu) / 1023.0f, 2.2f),
-        pow(((packed_material >> 10) & 0x3FFu) / 1023.0f, 2.2f),
-        pow(((packed_material) & 0x3FFu) / 1023.0f, 2.2f)
-    );
-#else
-    MaterialEvaluated material2;
-    // Unpack the albedo
-    uint packed_albedo = (packed_material >> 16);
-    material2.albedo = float3(
-        pow(((packed_albedo >> 11) & 0x1Fu) / 31.0f, 2.2f),
-        pow(((packed_albedo >> 5) & 0x3Fu) / 63.0f, 2.2f),
-        pow(((packed_albedo >> 0) & 0x1Fu) / 31.0f, 2.2f)
-    );
-
-    // Unpack the metallicity and roughness
-    uint packed_metallicity_roughness = (packed_material & 0xFFFFu);
-
-    material2.metallicity = ((packed_metallicity_roughness >> 8) & 0xFFu) / 255.0f;
-    material2.roughness = ((packed_metallicity_roughness >> 0) & 0xFFu) / 255.0f;
-
-    material = MakeMaterialBRDF(material2);
-#endif
-    return material;
 }
 
 #endif // WORLD_SPACE_RESTIR_HLSL

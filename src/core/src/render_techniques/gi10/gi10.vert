@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -38,6 +38,11 @@ ConstantBuffer<HashGridCacheConstants> g_HashGridCacheConstants;
 #include "hash_grid_cache.hlsl"
 
 float4 ResolveGI10(in uint idx : SV_VertexID) : SV_POSITION
+{
+    return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1.0f, 0.0f);
+}
+
+float4 DebugReflection(in uint idx : SV_VertexID) : SV_POSITION
 {
     return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1.0f, 0.0f);
 }

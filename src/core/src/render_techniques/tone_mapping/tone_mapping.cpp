@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,7 @@ THE SOFTWARE.
 #include "tone_mapping.h"
 
 #include "capsaicin_internal.h"
+#include "../../components/blue_noise_sampler/blue_noise_sampler.h"
 
 namespace Capsaicin
 {
@@ -42,12 +43,19 @@ RenderOptionList ToneMapping::getRenderOptions() noexcept
     return newOptions;
 }
 
-ToneMapping::RenderOptions ToneMapping::convertOptions(RenderSettings const &settings) noexcept
+ToneMapping::RenderOptions ToneMapping::convertOptions(RenderOptionList const &options) noexcept
 {
     RenderOptions newOptions;
-    RENDER_OPTION_GET(tonemap_enable, newOptions, settings.options_)
-    RENDER_OPTION_GET(tonemap_exposure, newOptions, settings.options_)
+    RENDER_OPTION_GET(tonemap_enable, newOptions, options)
+    RENDER_OPTION_GET(tonemap_exposure, newOptions, options)
     return newOptions;
+}
+
+ComponentList ToneMapping::getComponents() const noexcept
+{
+    ComponentList components;
+    components.emplace_back(COMPONENT_MAKE(BlueNoiseSampler));
+    return components;
 }
 
 AOVList ToneMapping::getAOVs() const noexcept
@@ -68,23 +76,31 @@ bool ToneMapping::init(CapsaicinInternal const &capsaicin) noexcept
 
 void ToneMapping::render(CapsaicinInternal &capsaicin) noexcept
 {
-    auto const &settings = capsaicin.getRenderSettings();
-    options              = convertOptions(capsaicin.getRenderSettings());
+    options = convertOptions(capsaicin.getOptions());
 
     if (!options.tonemap_enable) return;
 
-    uint32_t const buffer_dimensions[] = {capsaicin.getWidth(), capsaicin.getHeight()};
+    uint32_t const buffer_dimensions[] =
+    {
+        capsaicin.getWidth(),
+        capsaicin.getHeight()
+    };
+
     gfxProgramSetParameter(gfx_, tone_mapping_program_, "g_BufferDimensions", buffer_dimensions);
+    gfxProgramSetParameter(gfx_, tone_mapping_program_, "g_FrameIndex", capsaicin.getFrameIndex());
     gfxProgramSetParameter(gfx_, tone_mapping_program_, "g_Exposure", options.tonemap_exposure);
-    GfxTexture input  = capsaicin.getAOVBuffer("Color");
-    GfxTexture output = input;
-    if (!settings.debug_view_.empty() && settings.debug_view_ != "None")
+
+    GfxTexture input      = capsaicin.getAOVBuffer("Color");
+    GfxTexture output     = input;
+    auto       debug_view = capsaicin.getCurrentDebugView();
+
+    if (!debug_view.empty() && debug_view != "None")
     {
         // Tone map the debug buffer if we are using a debug view
-        if (capsaicin.checkDebugViewAOV(settings.debug_view_))
+        if (capsaicin.checkDebugViewAOV(debug_view))
         {
             // If the debug view is actually an AOV then only tonemap if its a floating point format
-            auto const debugAOV = capsaicin.getAOVBuffer(settings.debug_view_);
+            auto const debugAOV = capsaicin.getAOVBuffer(debug_view);
             auto const format   = debugAOV.getFormat();
             if (format == DXGI_FORMAT_R32G32B32A32_FLOAT || format == DXGI_FORMAT_R32G32B32_FLOAT
                 || format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R11G11B10_FLOAT)
@@ -99,6 +115,10 @@ void ToneMapping::render(CapsaicinInternal &capsaicin) noexcept
             output = input;
         }
     }
+
+    auto blue_noise_sampler = capsaicin.getComponent<BlueNoiseSampler>();
+    blue_noise_sampler->addProgramParameters(capsaicin, tone_mapping_program_);
+
     gfxProgramSetParameter(gfx_, tone_mapping_program_, "g_InputBuffer", input);
     gfxProgramSetParameter(gfx_, tone_mapping_program_, "g_OutputBuffer", output);
 
@@ -110,9 +130,18 @@ void ToneMapping::render(CapsaicinInternal &capsaicin) noexcept
     gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
 }
 
-void ToneMapping::terminate()
+void ToneMapping::terminate() noexcept
 {
     gfxDestroyKernel(gfx_, tone_mapping_kernel_);
     gfxDestroyProgram(gfx_, tone_mapping_program_);
+}
+
+void ToneMapping::renderGUI(CapsaicinInternal &capsaicin) const noexcept
+{
+    bool &enabled = capsaicin.getOption<bool>("tonemap_enable");
+    if (!enabled) ImGui::BeginDisabled(true);
+    ImGui::DragFloat("Exposure", &capsaicin.getOption<float>("tonemap_exposure"), 5e-3f);
+    if (!enabled) ImGui::EndDisabled();
+    ImGui::Checkbox("Enable Tone Mapping", &enabled);
 }
 } // namespace Capsaicin

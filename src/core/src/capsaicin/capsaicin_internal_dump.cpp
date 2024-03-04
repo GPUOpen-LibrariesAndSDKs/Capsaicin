@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,20 +21,21 @@ THE SOFTWARE.
 ********************************************************************/
 #include "capsaicin_internal.h"
 
-#pragma warning(push)
-#pragma warning(disable : 4018)
-#define TINYEXR_IMPLEMENTATION
+#include <fstream>
+#include <sstream>
 #include <tinyexr.h>
-#pragma warning(pop)
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 namespace Capsaicin
 {
 void CapsaicinInternal::dumpAOVBuffer(char const *file_path, std::string_view const &aov)
 {
-    dump_requests_.push_back({file_path, aov});
+    dump_requests_.push_back({file_path, std::string(aov)});
+}
+
+void CapsaicinInternal::dumpCamera(char const *file_path, bool jittered)
+{
+    dump_camera_requests_.push_back({file_path, jittered});
 }
 
 void CapsaicinInternal::dumpAnyBuffer(char const *file_path, GfxTexture dump_buffer)
@@ -49,7 +50,7 @@ void CapsaicinInternal::dumpBuffer(char const *dump_file_path, GfxTexture dumped
         dumped_buffer.getWidth() ? dumped_buffer.getWidth() : gfxGetBackBufferWidth(gfx_);
     uint32_t dump_buffer_height =
         dumped_buffer.getHeight() ? dumped_buffer.getHeight() : gfxGetBackBufferHeight(gfx_);
-    uint64_t dump_buffer_size = dump_buffer_width * dump_buffer_height * 4 * sizeof(float);
+    uint64_t dump_buffer_size = (uint64_t)dump_buffer_width * dump_buffer_height * 4 * sizeof(float);
 
     GfxBuffer dump_copy_buffer = gfxCreateBuffer(gfx_, dump_buffer_size, nullptr, kGfxCpuAccess_None);
     dump_copy_buffer.setName("Capsaicin_DumpCopyBuffer");
@@ -96,9 +97,9 @@ void CapsaicinInternal::saveImage(
 void CapsaicinInternal::saveEXR(
     GfxBuffer dump_buffer, uint32_t dump_buffer_width, uint32_t dump_buffer_height, char const *exr_file_path)
 {
-    char const channel_names[] = {'A', 'B', 'G', 'R'};
+    char const channel_names[] = {'B', 'G', 'R'};
     int const  channel_count   = ARRAYSIZE(channel_names);
-    static_assert(channel_count > 0 && channel_count <= 4);
+    static_assert(channel_count > 0 && channel_count <= 3);
 
     // Header
     std::vector<EXRChannelInfo> channel_infos;
@@ -115,7 +116,7 @@ void CapsaicinInternal::saveEXR(
 
     EXRHeader exr_header;
     InitEXRHeader(&exr_header);
-    exr_header.compression_type      = TINYEXR_COMPRESSIONTYPE_NONE;
+    exr_header.compression_type      = TINYEXR_COMPRESSIONTYPE_PIZ;
     exr_header.num_channels          = channel_count;
     exr_header.channels              = &channel_infos[0];
     exr_header.pixel_types           = &pixel_types[0];
@@ -131,13 +132,12 @@ void CapsaicinInternal::saveEXR(
     std::vector<unsigned char *>    images;
     for (char channel_name : channel_names)
     {
-        int dump_channel_offset;
+        int dump_channel_offset = 0;
         switch (channel_name)
         {
         case 'R': dump_channel_offset = 0; break;
         case 'G': dump_channel_offset = 1; break;
         case 'B': dump_channel_offset = 2; break;
-        case 'A': dump_channel_offset = 3; break;
         default: assert(false);
         }
 
@@ -184,7 +184,7 @@ void CapsaicinInternal::saveJPG(
     const uint32_t image_pixel_count = dump_buffer_width * dump_buffer_height;
 
     std::vector<unsigned char> image_data;
-    image_data.resize(image_width * image_height * 4);
+    image_data.resize((size_t)image_width * image_height * 3);
 
     for (size_t pixel_index = 0; pixel_index < image_pixel_count; ++pixel_index)
     {
@@ -193,16 +193,126 @@ void CapsaicinInternal::saveJPG(
                 glm::clamp(dump_buffer_data[4 * pixel_index + channel_offset], 0.f, 1.f) * 255.f);
         };
 
-        image_data[4 * pixel_index + 0] = quantize(0);
-        image_data[4 * pixel_index + 1] = quantize(1);
-        image_data[4 * pixel_index + 2] = quantize(2);
-        image_data[4 * pixel_index + 3] = quantize(3);
+        image_data[3 * pixel_index + 0] = quantize(0);
+        image_data[3 * pixel_index + 1] = quantize(1);
+        image_data[3 * pixel_index + 2] = quantize(2);
     }
 
-    int ret = stbi_write_jpg(jpg_file_path, image_width, image_height, 4, image_data.data(), 90);
+    int ret = stbi_write_jpg(jpg_file_path, image_width, image_height, 3, image_data.data(), 90);
     if (ret == 0)
     {
         GFX_PRINT_ERROR(kGfxResult_InternalError, "Can't save '%s'", jpg_file_path);
     }
 }
+
+// clang-format off
+
+void CapsaicinInternal::dumpCamera(char const *json_file_path, CameraMatrices const &camera_matrices, float camera_jitter_x, float camera_jitter_y)
+{
+    const auto& _c = getCamera();
+    const auto& _0 = camera_matrices.view;
+#if 0
+    // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+    const auto& _1 = camera_matrices.view_prev;
+#endif
+    const auto& _2 = camera_matrices.inv_view;
+    const auto& _3 = camera_matrices.projection;
+#if 0
+    // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+    const auto& _4 = camera_matrices.projection_prev;
+#endif
+    const auto& _5 = camera_matrices.inv_projection;
+    const auto& _6 = camera_matrices.view_projection;
+#if 0
+    // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+    const auto& _7 = camera_matrices.view_projection_prev;
+#endif
+    const auto& _8 = camera_matrices.inv_view_projection;
+
+    auto formatMatrix = [](const glm::mat4x4& matrix) -> std::string {
+        std::ostringstream json_matrix;
+        json_matrix
+            << matrix[0][0] << ", " << matrix[0][1] << ", " << matrix[0][2] << ", " << matrix[0][3] << ", "
+            << matrix[1][0] << ", " << matrix[1][1] << ", " << matrix[1][2] << ", " << matrix[1][3] << ", "
+            << matrix[2][0] << ", " << matrix[2][1] << ", " << matrix[2][2] << ", " << matrix[2][3] << ", "
+            << matrix[3][0] << ", " << matrix[3][1] << ", " << matrix[3][2] << ", " << matrix[3][3];
+        return json_matrix.str();
+    };
+
+    auto formatVector = [](const glm::vec3& vector) -> std::string {
+        std::ostringstream json_vector;
+        json_vector
+            << vector[0] << ", " << vector[1] << ", " << vector[2];
+        return json_vector.str();
+    };
+
+    std::ofstream json_file(json_file_path);
+    if (json_file.is_open())
+    {
+        json_file
+            << "{"                                            << '\n'
+            << "    \"type\": \"perpective\","                << '\n'
+            << "    \"eye\": ["                               << '\n'
+            << "        " << formatVector(_c.eye)             << '\n'
+            << "    ],"                                       << '\n'
+            << "    \"center\": ["                            << '\n'
+            << "        " << formatVector(_c.center)          << '\n'
+            << "    ],"                                       << '\n'
+            << "    \"up\": ["                                << '\n'
+            << "        " << formatVector(_c.up)              << '\n'
+            << "    ],"                                       << '\n'
+            << "    \"aspect\": " << _c.aspect << ", "        << '\n'
+            << "    \"fovY\": "   << _c.fovY   << ", "        << '\n'
+            << "    \"nearZ\": "  << _c.nearZ  << ", "        << '\n'
+            << "    \"farZ\": "   << _c.farZ   << ", "        << '\n'
+            << "    \"jitterX\": " << camera_jitter_x << ", " << '\n'
+            << "    \"jitterY\": " << camera_jitter_y << ", " << '\n'
+            << "    \"view\": ["                              << '\n'
+            << "        " << formatMatrix(_0)                 << '\n'
+            << "    ],"                                       << '\n'
+        #if 0
+            // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+            << "    \"view_prev\": ["                         << '\n'
+            << "        " << formatMatrix(_1)                 << '\n'
+            << "    ],"                                       << '\n'
+        #endif
+            << "    \"inv_view\": ["                          << '\n'
+            << "        " << formatMatrix(_2)                 << '\n'
+            << "    ],"                                       << '\n'
+            << "    \"projection\": ["                        << '\n'
+            << "        " << formatMatrix(_3)                 << '\n'
+            << "    ],"                                       << '\n'
+        #if 0
+            // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+            << "    \"projection_prev\": ["                   << '\n'
+            << "        " << formatMatrix(_4)                 << '\n'
+            << "    ],"                                       << '\n'
+        #endif
+            << "    \"inv_projection\": ["                    << '\n'
+            << "        " << formatMatrix(_5)                 << '\n'
+            << "    ],"                                       << '\n'
+            << "    \"view_projection\": ["                   << '\n'
+            << "        " << formatMatrix(_6)                 << '\n'
+            << "    ],"                                       << '\n'
+        #if 0
+            // BE CAREFUL: previous frame matrices are tweaked for computing motion vectors
+            << "    \"view_projection_prev\": ["              << '\n'
+            << "        " << formatMatrix(_7)                 << '\n'
+            << "    ],"                                       << '\n'
+        #endif
+            << "    \"inv_view_projection\": ["               << '\n'
+            << "        " << formatMatrix(_8)                 << '\n'
+            << "    ]"                                        << '\n'
+            << "}"                                            << std::endl;
+        
+        json_file.close();
+    }
+    else
+    {
+        GFX_PRINT_ERROR(kGfxResult_InternalError, "Can't write to '%s'", json_file_path);
+    }
+}
+
+// clang-format on
+
 } // namespace Capsaicin

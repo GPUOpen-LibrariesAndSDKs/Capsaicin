@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -28,18 +28,16 @@ THE SOFTWARE.
 namespace Capsaicin
 {
 class CapsaicinInternal;
-class RenderTechnique;
 
 /** A abstract component class used to encapsulate shared operations between render techniques. */
-class Component
-    : public Factory<Component>
-    , public Timeable
+class Component : public Timeable
 {
     Component(Component const &)            = delete;
     Component &operator=(Component const &) = delete;
+    Component()                             = delete;
 
 public:
-    Component(Key, std::string_view const &name) noexcept;
+    Component(std::string_view const &name) noexcept;
 
     virtual ~Component() = default;
 
@@ -82,6 +80,20 @@ public:
      */
     virtual void run(CapsaicinInternal &capsaicin) noexcept = 0;
 
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    virtual void terminate() noexcept = 0;
+
+    /**
+     * Render GUI options.
+     * @param [in,out] capsaicin The current capsaicin context.
+     */
+    virtual void renderGUI(CapsaicinInternal &capsaicin) const noexcept;
+
 protected:
 };
+
+class ComponentFactory : public Factory<Component>
+{};
 } // namespace Capsaicin

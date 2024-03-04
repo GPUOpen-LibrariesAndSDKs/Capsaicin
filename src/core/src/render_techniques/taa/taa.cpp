@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -41,10 +41,10 @@ RenderOptionList TAA::getRenderOptions() noexcept
     return newOptions;
 }
 
-TAA::RenderOptions TAA::convertOptions(RenderSettings const &settings) noexcept
+TAA::RenderOptions TAA::convertOptions(RenderOptionList const &options) noexcept
 {
     RenderOptions newOptions;
-    RENDER_OPTION_GET(taa_enable, newOptions, settings.options_)
+    RENDER_OPTION_GET(taa_enable, newOptions, options)
     return newOptions;
 }
 
@@ -55,17 +55,28 @@ AOVList TAA::getAOVs() const noexcept
 
     aovs.push_back({"VisibilityDepth"});
     aovs.push_back({"Velocity"});
-    aovs.push_back({"DirectLighting"});
-    aovs.push_back({"GlobalIllumination"});
+    aovs.push_back({.name = "DirectLighting", .flags = AOV::Optional});
+    aovs.push_back({.name = "GlobalIllumination", .flags = AOV::Optional});
     return aovs;
 }
 
 bool TAA::init(CapsaicinInternal const &capsaicin) noexcept
 {
+    std::vector<char const *> defines;
+    if (capsaicin.hasAOVBuffer("DirectLighting"))
+    {
+        defines.push_back("HAS_DIRECT_LIGHTING_BUFFER");
+    }
+    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
+    {
+        defines.push_back("HAS_GLOBAL_ILLUMINATION_BUFFER");
+    }
     taa_program_             = gfxCreateProgram(gfx_, "render_techniques/taa/taa", capsaicin.getShaderPath());
-    resolve_temporal_kernel_ = gfxCreateComputeKernel(gfx_, taa_program_, "ResolveTemporal");
-    resolve_passthru_kernel_ = gfxCreateComputeKernel(gfx_, taa_program_, "ResolvePassthru");
-    update_history_kernel_   = gfxCreateComputeKernel(gfx_, taa_program_, "UpdateHistory");
+    resolve_temporal_kernel_ = gfxCreateComputeKernel(
+        gfx_, taa_program_, "ResolveTemporal", defines.data(), (uint32_t)defines.size());
+    resolve_passthru_kernel_ = gfxCreateComputeKernel(
+        gfx_, taa_program_, "ResolvePassthru", defines.data(), (uint32_t)defines.size());
+    update_history_kernel_ = gfxCreateComputeKernel(gfx_, taa_program_, "UpdateHistory");
     return !!taa_program_;
 }
 
@@ -78,7 +89,7 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
     bool not_cleared_history = true;
     if (buffer_width != color_buffers_->getWidth() || buffer_height != color_buffers_->getHeight())
     {
-        for (GfxTexture color_buffer : color_buffers_)
+        for (GfxTexture &color_buffer : color_buffers_)
             gfxDestroyTexture(gfx_, color_buffer);
 
         for (uint32_t i = 0; i < ARRAYSIZE(color_buffers_); ++i)
@@ -99,7 +110,7 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
     // Bind the shader parameters
     uint32_t const buffer_dimensions[] = {buffer_width, buffer_height};
 
-    options = convertOptions(capsaicin.getRenderSettings());
+    options = convertOptions(capsaicin.getOptions());
 
     gfxProgramSetParameter(
         gfx_, taa_program_, "g_HaveHistory", not_cleared_history && capsaicin.getFrameIndex() > 0);
@@ -109,10 +120,16 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, taa_program_, "g_VelocityBuffer", capsaicin.getAOVBuffer("Velocity"));
 
     gfxProgramSetParameter(gfx_, taa_program_, "g_ColorBuffer", capsaicin.getAOVBuffer("Color"));
-    gfxProgramSetParameter(
-        gfx_, taa_program_, "g_DirectLightingBuffer", capsaicin.getAOVBuffer("DirectLighting"));
-    gfxProgramSetParameter(
-        gfx_, taa_program_, "g_GlobalIlluminationBuffer", capsaicin.getAOVBuffer("GlobalIllumination"));
+    if (capsaicin.hasAOVBuffer("DirectLighting"))
+    {
+        gfxProgramSetParameter(
+            gfx_, taa_program_, "g_DirectLightingBuffer", capsaicin.getAOVBuffer("DirectLighting"));
+    }
+    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
+    {
+        gfxProgramSetParameter(
+            gfx_, taa_program_, "g_GlobalIlluminationBuffer", capsaicin.getAOVBuffer("GlobalIllumination"));
+    }
 
     gfxProgramSetParameter(gfx_, taa_program_, "g_LinearSampler", capsaicin.getLinearSampler());
     gfxProgramSetParameter(gfx_, taa_program_, "g_NearestSampler", capsaicin.getNearestSampler());
@@ -161,9 +178,9 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
     }
 }
 
-void TAA::terminate()
+void TAA::terminate() noexcept
 {
-    for (GfxTexture color_buffer : color_buffers_)
+    for (GfxTexture &color_buffer : color_buffers_)
         gfxDestroyTexture(gfx_, color_buffer);
 
     gfxDestroyProgram(gfx_, taa_program_);
@@ -172,5 +189,10 @@ void TAA::terminate()
     gfxDestroyKernel(gfx_, update_history_kernel_);
 
     memset(color_buffers_, 0, sizeof(color_buffers_));
+}
+
+void TAA::renderGUI(CapsaicinInternal &capsaicin) const noexcept
+{
+    ImGui::Checkbox("Use TAA", &capsaicin.getOption<bool>("taa_enable"));
 }
 } // namespace Capsaicin

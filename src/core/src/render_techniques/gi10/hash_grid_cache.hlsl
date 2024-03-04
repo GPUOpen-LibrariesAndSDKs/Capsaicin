@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -47,6 +47,7 @@ struct HashGridCache_Visibility
 //! Hash-grid radiance caching shader bindings.
 //!
 
+RWStructuredBuffer<float>  g_HashGridCache_BuffersFloat[]  : register(space93);
 RWStructuredBuffer<uint>   g_HashGridCache_BuffersUint[]   : register(space96);
 RWStructuredBuffer<uint2>  g_HashGridCache_BuffersUint2[]  : register(space97);
 RWStructuredBuffer<float4> g_HashGridCache_BuffersFloat4[] : register(space98);
@@ -69,6 +70,12 @@ RWStructuredBuffer<float4> g_HashGridCache_BuffersFloat4[] : register(space98);
 #define                    g_HashGridCache_PackedTileIndexBuffer         g_HashGridCache_BuffersUint  [HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0 + g_HashGridCacheConstants.buffer_ping_pong]
 #define                    g_HashGridCache_PreviousPackedTileIndexBuffer g_HashGridCache_BuffersUint  [HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1 - g_HashGridCacheConstants.buffer_ping_pong]
 #define                    g_HashGridCache_DebugCellBuffer               g_HashGridCache_BuffersFloat4[HASHGRIDCACHE_DEBUGCELLBUFFER]
+#define                    g_HashGridCache_BucketOccupancyBuffer         g_HashGridCache_BuffersUint  [HASHGRIDCACHE_BUCKETOCCUPANCYBUFFER]
+#define                    g_HashGridCache_BucketOverflowCountBuffer     g_HashGridCache_BuffersUint  [HASHGRIDCACHE_BUCKETOVERFLOWCOUNTBUFFER]
+#define                    g_HashGridCache_BucketOverflowBuffer          g_HashGridCache_BuffersUint  [HASHGRIDCACHE_BUCKETOVERFLOWBUFFER]
+#define                    g_HashGridCache_FreeBucketCountBuffer         g_HashGridCache_BuffersUint  [HASHGRIDCACHE_FREEBUCKETBUFFER]
+#define                    g_HashGridCache_UsedBucketCountBuffer         g_HashGridCache_BuffersUint  [HASHGRIDCACHE_USEDBUCKETBUFFER]
+#define                    g_HashGridCache_StatsBuffer                   g_HashGridCache_BuffersFloat [HASHGRIDCACHE_STATSBUFFER]
 
 //!
 //! Hash-grid radiance caching common functions.
@@ -80,7 +87,7 @@ RWStructuredBuffer<float4> g_HashGridCache_BuffersFloat4[] : register(space98);
 // Gets the size of the hash cell for the given world-space position.
 float HashGridCache_GetCellSize(in float3 position)
 {
-    float cell_size_step = distance(g_Eye, position) * g_HashGridCacheConstants.cell_size;
+    float cell_size_step = max(distance(g_Eye, position) * g_HashGridCacheConstants.cell_size, g_HashGridCacheConstants.min_cell_size);
     uint log_step_multiplier = uint(log2(HASHGRIDCACHE_STEP_FACTOR * cell_size_step));
     float hit_cell_size = HASHGRIDCACHE_SIZE_FACTOR * exp2(log_step_multiplier);
     return hit_cell_size;
@@ -122,7 +129,7 @@ HashGridCache_Desc HashGridCache_GetDesc(in HashGridCache_Data data)
     float3 direction = data.direction;
     float hit_distance = data.hit_distance;
 
-    float cell_size_step = distance(eye_position, hit_position) * g_HashGridCacheConstants.cell_size;
+    float cell_size_step = max(distance(eye_position, hit_position) * g_HashGridCacheConstants.cell_size, g_HashGridCacheConstants.min_cell_size);
     float log_step_multiplier = floor(log2(HASHGRIDCACHE_STEP_FACTOR * cell_size_step));
     float hit_cell_size = HASHGRIDCACHE_SIZE_FACTOR * exp2(log_step_multiplier);
     float hit_tile_size = hit_cell_size * float(g_HashGridCacheConstants.tile_cell_ratio);
@@ -135,16 +142,16 @@ HashGridCache_Desc HashGridCache_GetDesc(in HashGridCache_Data data)
     uint3 d = asuint(int3(signed_d));             //
     uint1 t = uint(hit_distance < hit_tile_size);
 
-    uint bucket_index = pcg(l +
-                        pcg(c.x + pcg(c.y + pcg(c.z +
-                        pcg(d.x + pcg(d.y + pcg(d.z +
-                        pcg(t)))))))) % g_HashGridCacheConstants.num_buckets;
+    uint bucket_index = pcgHash(l +
+                        pcgHash(c.x + pcgHash(c.y + pcgHash(c.z +
+                        pcgHash(d.x + pcgHash(d.y + pcgHash(d.z +
+                        pcgHash(t)))))))) % g_HashGridCacheConstants.num_buckets;
 
     uint tile_hash  = max(1,
-                      xxhash32(l +
-                      xxhash32(c.x + xxhash32(c.y + xxhash32(c.z +
-                      xxhash32(d.x + xxhash32(d.y + xxhash32(d.z +
-                      xxhash32(t)))))))));
+                      xxHash(l +
+                      xxHash(c.x + xxHash(c.y + xxHash(c.z +
+                      xxHash(d.x + xxHash(d.y + xxHash(d.z +
+                      xxHash(t)))))))));
 
     float3 e = floor(hit_position / hit_cell_size) - floor(hit_position / hit_tile_size) * g_HashGridCacheConstants.tile_cell_ratio;
     uint2 cell_offset;
@@ -251,7 +258,14 @@ uint HashGridCache_InsertCell(in HashGridCache_Data data, out uint tile_index, o
             break;  // found existing tile and cell
     }
     if (bucket_offset >= g_HashGridCacheConstants.num_tiles_per_bucket)
+    {
+    #ifdef DEBUG_HASH_STATS
+        uint previous_value;
+        InterlockedAdd(g_HashGridCache_BucketOverflowCountBuffer[desc.bucket_index], 1, previous_value);
+    #endif        
         return kGI10_InvalidId; // too much collisions, out of tiles :(
+    }
+
     return HashGridCache_CellIndex(desc.cell_offset, tile_index);
 }
 
@@ -356,13 +370,12 @@ float3 HashGridCache_UnpackDirection(in uint packed_direction)
     return normalize(2.0f * direction / 255.0f - 1.0f);
 }
 
-// Packs the visibility information.
-#define HashGridCache_PackVisibility(RAY_QUERY)                                                                         \
-    float4(asfloat(RAY_QUERY.CommittedInstanceIndex() | (RAY_QUERY.CommittedTriangleFrontFace() ? 0 : 0x80000000u)),    \
-           asfloat(RAY_QUERY.CommittedGeometryIndex()),                                                                 \
-           asfloat(RAY_QUERY.CommittedPrimitiveIndex()),                                                                \
-           asfloat((f32tof16(ray_query.CommittedTriangleBarycentrics().x) << 16) |                                      \
-                   (f32tof16(ray_query.CommittedTriangleBarycentrics().y) << 0)))
+float4 HashGridCache_PackVisibility(HashGridCache_Visibility visibility)
+{
+    return float4(asfloat(visibility.instance_index | (visibility.is_front_face ? 0 : 0x80000000u)),
+        asfloat(visibility.geometry_index), asfloat(visibility.primitive_index),
+        asfloat((f32tof16(visibility.barycentrics.x) << 16) | (f32tof16(visibility.barycentrics.y) << 0)));
+}
 
 // Unpacks the visibility information.
 HashGridCache_Visibility HashGridCache_UnpackVisibility(in float4 packed_visibility)

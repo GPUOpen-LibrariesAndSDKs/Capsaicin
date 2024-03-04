@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -26,16 +26,21 @@ uint   g_FrameIndex;
 
 StructuredBuffer<Material> g_MaterialBuffer;
 
+#include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"
+
 Texture2D    g_TextureMaps[];
 SamplerState g_TextureSampler;
 
+#include "../../geometry/geometry.hlsl"
 #include "../../math/math.hlsl"
 #include "../../materials/materials.hlsl"
 
 struct Params
 {
-    float4 position   : SV_Position;
+    float4 position : SV_Position;
+#if defined(HAS_SHADING_NORMAL) || defined(HAS_VERTEX_NORMAL)
     float3 normal     : NORMAL;
+#endif
     float2 uv         : TEXCOORD;
     float3 world      : POSITION0;
     float4 current    : POSITION1;
@@ -46,71 +51,92 @@ struct Params
 
 struct Pixel
 {
-    float4 visibility : SV_Target0;
-    float4 normal     : SV_Target1;
-    float4 details    : SV_Target2;
-    float2 velocity   : SV_Target3;
+    float4 visibility  : SV_Target0;
+    float4 geom_normal : SV_Target1;
+    float2 velocity    : SV_Target2;
+#ifdef HAS_SHADING_NORMAL
+    float4 shad_normal : SV_Target3;
+#endif
+#ifdef HAS_VERTEX_NORMAL
+    float4 vert_normal : SV_Target4;
+#endif
+#ifdef HAS_ROUGHNESS
+    float  roughness   : SV_Target5;
+#endif
 };
 
-float2 CalculateMotionVector(in float4 current_pos, in float4 previous_pos)
+Pixel main(in Params params, in float3 barycentrics : SV_Barycentrics, in uint primitiveID : SV_PrimitiveID)
 {
-    float2 current_uv  = 0.5f * current_pos.xy  / current_pos.w;
-    float2 previous_uv = 0.5f * previous_pos.xy / previous_pos.w;
+    Pixel             pixel;
+    Material          material = g_MaterialBuffer[params.materialID];
 
-    return (current_uv - previous_uv) * float2(1.0f, -1.0f);
-}
-
-Pixel main(in Params params, in float3 barycentrics : SV_Barycentrics, in uint primitiveID : SV_PrimitiveID, in bool is_front_face : SV_IsFrontFace)
-{
-    Pixel    pixel;
-    Material material = g_MaterialBuffer[params.materialID];
-
+    float alpha = material.normal_alpha_side.y;
     uint alphaMap  = asuint(material.albedo.w);
-    uint normalMap = asuint(material.normal_ao.x);
-
     if (alphaMap != uint(-1))
     {
-        float alpha = g_TextureMaps[alphaMap].SampleLevel(g_TextureSampler, params.uv, 0).w;
+        alpha *= g_TextureMaps[alphaMap].SampleLevel(g_TextureSampler, params.uv, 0).w;
+    }
+    if (alpha != 1.0f)
+    {
         if (alpha < 0.5f)
         {
             discard;
         }
     }
 
-    float3 normal  = normalize(params.normal);
-    float3 details = normal;
+    float3 dFdxPos = ddx_fine(params.world);
+    float3 dFdyPos = ddy_fine(params.world);
+    float3 face_normal = normalize(cross(dFdyPos, dFdxPos));
 
+#if defined(HAS_SHADING_NORMAL) || defined(HAS_VERTEX_NORMAL)
+    float3 vertex_normal  = normalize(params.normal);
+    // SV_IsFrontFace incorrectly flips normals when the geometry has non uniform negative(mirrored) scaling
+    vertex_normal = dot(vertex_normal, face_normal) >= 0.0f ? vertex_normal : -vertex_normal;
+
+#   ifdef HAS_SHADING_NORMAL
+    float3 details = vertex_normal;
+    uint normalMap = asuint(material.normal_alpha_side.x);
     if (normalMap != uint(-1))
     {
-        float3 view_direction = normalize(g_Eye - params.world);
+        float2 dFdxUV = ddx(params.uv);
+        float2 dFdyUV = ddy(params.uv);
 
-        float3 dp1  = ddx(-view_direction);
-        float3 dp2  = ddy(-view_direction);
-        float2 duv1 = ddx(params.uv);
-        float2 duv2 = ddy(params.uv);
+        float determinate = dFdxUV.x * dFdyUV.y - dFdyUV.x * dFdxUV.y;
+        float3 normalTan = 2.0f * g_TextureMaps[normalMap].Sample(g_TextureSampler, params.uv).xyz - 1.0f;
+        // If the determinate is zero then the matrix is non invertable
+        if (determinate != 0.0f && dot(normalTan, normalTan) > 0.0f)
+        {
+            determinate = rcp(determinate);
+            float3 tangentBasis = (dFdxPos * dFdyUV.yyy - dFdyPos * dFdxUV.yyy) * determinate;
+            float3 bitangentBasis = (dFdyPos * dFdxUV.xxx - dFdxPos * dFdyUV.xxx) * determinate;
 
-        float3 dp2perp   = normalize(cross(dp2, normal));
-        float3 dp1perp   = normalize(cross(normal, dp1));
-        float3 tangent   = dp2perp * duv1.x + dp1perp * duv2.x;
-        float3 bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+            // Gram-Schmidt orthogonalise tangent
+            float3 tangent = normalize(tangentBasis - vertex_normal * dot(vertex_normal, tangentBasis));
+            float3 bitangent = cross(vertex_normal, tangent);
 
-        float    invmax  = rsqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
-        float3x3 tbn     = transpose(float3x3(tangent * invmax, bitangent * invmax, normal));
-        float3   disturb = 2.0f * g_TextureMaps[normalMap].Sample(g_TextureSampler, params.uv).xyz - 1.0f;
+            // Correct handedness
+            bitangent = dot(bitangent, bitangentBasis) >= 0.0f ? -bitangent : bitangent;
 
-        details = normalize(mul(tbn, disturb));
+            float3x3 tbn = float3x3(tangent, bitangent, vertex_normal);
+            details = normalize(mul(normalTan, tbn));
+        }
     }
+#   endif // HAS_SHADING_NORMAL
+#endif // HAS_SHADING_NORMAL || HAS_VERTEX_NORMAL
 
-    if (!is_front_face)
-    {
-        normal  = -normal;
-        details = -details;
-    }
-
-    pixel.visibility = float4(barycentrics.yz, asfloat(params.instanceID), asfloat(primitiveID));
-    pixel.normal     = float4(0.5f * normal  + 0.5f, 1.0f);
-    pixel.details    = float4(0.5f * details + 0.5f, 1.0f);
-    pixel.velocity   = CalculateMotionVector(params.current, params.previous);
+    pixel.visibility    = float4(barycentrics.yz, asfloat(params.instanceID), asfloat(primitiveID));
+    pixel.geom_normal = float4(0.5f * face_normal + 0.5f, 1.0f);
+    pixel.velocity      = CalculateMotionVector(params.current, params.previous);
+#ifdef HAS_SHADING_NORMAL
+    pixel.shad_normal   = float4(0.5f * details + 0.5f, 1.0f);
+#endif
+#ifdef HAS_VERTEX_NORMAL
+    pixel.vert_normal   = float4(0.5f * vertex_normal + 0.5f, 1.0f);
+#endif
+#ifdef HAS_ROUGHNESS
+    MaterialEvaluated materialEvaluated = MakeMaterialEvaluated(material, params.uv);
+    pixel.roughness     = materialEvaluated.roughness;
+#endif
 
     return pixel;
 }

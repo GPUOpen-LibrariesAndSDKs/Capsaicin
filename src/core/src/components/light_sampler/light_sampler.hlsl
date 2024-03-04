@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,66 +20,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
-#ifndef LIGHT_SAMPLER_HLSL
-#define LIGHT_SAMPLER_HLSL
-
-#include "../../lights/lights.hlsl"
-
-// Requires the following data to be defined in any shader that uses this file
-StructuredBuffer<uint> g_LightBufferSize;
-StructuredBuffer<Light> g_LightBuffer;
-
-/**
- * Check if the current scene has an environment light.
- * @returns True if environment light could be found.
- */
-bool hasLights()
-{
-    return (g_LightBufferSize[0] > 0);
-}
-
-/**
- * Get number of lights.
- * @returns The number of lights currently in the scene.
- */
-uint getNumberLights()
-{
-    return g_LightBufferSize[0];
-}
-
-/**
- * Get a light corresponding to a light index.
- * @param index The index of the light to retrieve (range [0, getNumberLights())).
- * @returns The number of lights currently in the scene.
- */
-Light getLight(uint index)
-{
-    return g_LightBuffer[index];
-}
-
-/**
- * Check if the current scene has an environment light.
- * @returns True if environment light could be found.
- */
-bool hasEnvironmentLight()
-{
-    if (g_LightBufferSize[0] == 0)
-    {
-        return false;
-    }
-    // Assumes that the environment light is always first
-    Light selectedLight = g_LightBuffer[0];
-    return selectedLight.get_light_type() == kLight_Environment;
-}
-
-/**
- * Get the current environment map.
- * @note This is only valid if the scene contains a valid environment map.
- * @returns The environment map.
- */
-LightEnvironment getEnvironmentLight()
-{
-    return MakeLightEnvironment(g_LightBuffer[0]);
-}
-
-#endif
+#include LIGHT_SAMPLER_HEADER

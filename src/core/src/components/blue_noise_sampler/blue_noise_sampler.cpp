@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,14 +27,18 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
+/** Constructor. */
+
+inline BlueNoiseSampler::BlueNoiseSampler() noexcept
+    : Component(Name)
+{}
+
 BlueNoiseSampler::~BlueNoiseSampler() noexcept
 {
-    gfxDestroyBuffer(gfx_, sobolBuffer);
-    gfxDestroyBuffer(gfx_, rankingTileBuffer);
-    gfxDestroyBuffer(gfx_, scramblingTileBuffer);
+    terminate();
 }
 
-bool BlueNoiseSampler::init(CapsaicinInternal const &capsaicin) noexcept
+bool BlueNoiseSampler::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noexcept
 {
     sobolBuffer          = gfxCreateBuffer(gfx_, sizeof(Sobol256x256), Sobol256x256);
     rankingTileBuffer    = gfxCreateBuffer(gfx_, sizeof(RankingTiles), RankingTiles);
@@ -42,13 +46,20 @@ bool BlueNoiseSampler::init(CapsaicinInternal const &capsaicin) noexcept
     return true;
 }
 
-void BlueNoiseSampler::run(CapsaicinInternal &capsaicin) noexcept
+void BlueNoiseSampler::run([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 {
     // Nothing to do
 }
 
+void BlueNoiseSampler::terminate() noexcept
+{
+    gfxDestroyBuffer(gfx_, sobolBuffer);
+    gfxDestroyBuffer(gfx_, rankingTileBuffer);
+    gfxDestroyBuffer(gfx_, scramblingTileBuffer);
+}
+
 void BlueNoiseSampler::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_SobolBuffer", sobolBuffer);
     gfxProgramSetParameter(gfx_, program, "g_RankingTile", rankingTileBuffer);

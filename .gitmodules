@@ -4,12 +4,6 @@
 [submodule "third_party/CLI11"]
 	path = third_party/CLI11
 	url = https://github.com/CLIUtils/CLI11
-[submodule "third_party/tinyexr"]
-	path = third_party/tinyexr
-	url = https://github.com/syoyo/tinyexr
-[submodule "third_party/miniz"]
-	path = third_party/miniz
-	url = https://github.com/richgel999/miniz.git
 [submodule "assets/CapsaicinTestMedia"]
 	path = assets/CapsaicinTestMedia
-	url = ../CapsaicinTestMedia.git
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/CapsaicinTestMedia.git

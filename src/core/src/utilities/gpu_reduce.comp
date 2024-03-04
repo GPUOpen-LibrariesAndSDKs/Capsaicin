@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -76,68 +76,78 @@ TYPE CombineWave(TYPE a)
 }
 #endif
 
-groupshared TYPE lds[GROUP_SIZE];
+groupshared TYPE lds[GROUP_SIZE / 16]; //Assume 16 as smallest possible wave size
 
 // Reduce sum template function
-void BlockReduceType(uint gidx, uint lidx, uint bidx, uint count)
+void BlockReduceType(uint gtid, uint gid, uint count)
 {
-    const uint ThreadGroupSize = GROUP_SIZE;
-
-	// Loop through each input key and combine
-    uint index = gidx + (bidx * ((KEYS_PER_THREAD - 1) * GROUP_SIZE));
-    TYPE result = g_InputBuffer[index];
-    index += GROUP_SIZE;
+    // Loop through each input key and combine
+    const uint prefixGroupKeys = gid * KEYS_PER_THREAD * GROUP_SIZE;
+    uint index = gtid + prefixGroupKeys;
+    if (index >= count)
+    {
+        return;
+    }
+    TYPE result = g_InputBuffer[index];;
     for (uint i = 1; i < KEYS_PER_THREAD; i++)
     {
+        index += GROUP_SIZE;
         if (index >= count)
         {
             break;
         }
-        Combine(result, g_InputBuffer[index]);
+        TYPE value = g_InputBuffer[index];
+        result = Combine(result, value);
     }
 
-	// Combine values across the wave
+    // Combine values across the wave
     result = CombineWave(result);
 
-	// Combine values across the group
-    for (uint j = WaveGetLaneCount(); j < ThreadGroupSize; j *= WaveGetLaneCount())
+    // Combine values across the group
+    const uint keysInGroup = count - prefixGroupKeys;
+    const uint validThreadsInGroup = min(keysInGroup, GROUP_SIZE);
+    for (uint j = validThreadsInGroup; j > WaveGetLaneCount();)
     {
-		// Use local data share to combine across waves
-        lds[lidx] = result;
+        // Use local data share to combine across waves
+        if (WaveIsFirstLane())
+        {
+            const uint waveID = gtid / WaveGetLaneCount();
+            lds[waveID] = result;
+        }
         GroupMemoryBarrierWithGroupSync();
 
-        uint numWaves = (ThreadGroupSize + j - 1) / j;
-        if (lidx >= numWaves)
+        j = (j + WaveGetLaneCount() - 1) / WaveGetLaneCount();
+        if (gtid >= j)
         {
             break;
         }
 
-		// Use the current wave to combine across group
-        result = lds[lidx * WaveGetLaneCount()];
+        // Use the current wave to combine across group
+        result = lds[gtid];
         result = CombineWave(result);
     }
 
-	// Write out final result
-    if (lidx == 0)
+    // Write out final result
+    if (gtid == 0)
     {
-        g_OutputBuffer[bidx] = result;
+        g_OutputBuffer[gid] = result;
     }
 }
 
 uint g_Count;
 
 [numthreads(GROUP_SIZE, 1, 1)]
-void BlockReduce(in uint gidx : SV_DispatchThreadID, in uint lidx : SV_GroupThreadID, in uint bidx : SV_GroupID)
+void BlockReduce(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
-    BlockReduceType(gidx, lidx, bidx, g_Count);
+    BlockReduceType(gtid, gid, g_Count);
 }
 
 StructuredBuffer<uint> g_InputLength;
 
 [numthreads(GROUP_SIZE, 1, 1)]
-void BlockReduceIndirect(in uint gidx : SV_DispatchThreadID, in uint lidx : SV_GroupThreadID, in uint bidx : SV_GroupID)
+void BlockReduceIndirect(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
-    BlockReduceType(gidx, lidx, bidx, g_InputLength[0]);
+    BlockReduceType(gtid, gid, g_InputLength[0]);
 }
 
 RWStructuredBuffer<uint4> g_Dispatch1;

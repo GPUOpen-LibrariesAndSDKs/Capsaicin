@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -34,11 +34,11 @@ GPUSort::~GPUSort() noexcept
     terminate();
 }
 
-bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+bool GPUSort::initialise(
+    GfxContext gfxIn, std::string_view const &shaderPath, Type type, Operation operation) noexcept
 {
-    gfx = capsaicin.getGfx();
+    gfx = gfxIn;
 
-    bool ret = false;
     if (!parallelSortCBBuffer)
     {
         // Currently we just allocate enough for a max number of 16 segments
@@ -48,7 +48,6 @@ bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operatio
         countScatterArgsBuffer.setName("Capsaicin_CountScatterArgsBuffer");
         reduceScanArgsBuffer = gfxCreateBuffer<uint>(gfx, 3 * 16);
         reduceScanArgsBuffer.setName("Capsaicin_ReduceScanArgsBuffer");
-        ret = true;
     }
 
     if (type != currentType || operation != currentOperation)
@@ -83,7 +82,7 @@ bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operatio
         gfxDestroyKernel(gfx, scanAdd);
         gfxDestroyKernel(gfx, scatter);
         gfxDestroyKernel(gfx, scatterPayload);
-        sortProgram = gfxCreateProgram(gfx, "utilities/gpu_sort", capsaicin.getShaderPath());
+        sortProgram = gfxCreateProgram(gfx, "utilities/gpu_sort", shaderPath.data());
         std::vector<char const *> baseDefines;
         switch (currentType)
         {
@@ -110,10 +109,14 @@ bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operatio
             gfx, sortProgram, "scatter", baseDefines.data(), static_cast<uint32_t>(baseDefines.size()));
         scatterPayload = gfxCreateComputeKernel(gfx, sortProgram, "scatterPayload", baseDefines.data(),
             static_cast<uint32_t>(baseDefines.size()));
-        ret            = true;
     }
 
-    return ret;
+    return !!scatterPayload;
+}
+
+bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+{
+    return initialise(capsaicin.getGfx(), capsaicin.getShaderPath(), type, operation);
 }
 
 void GPUSort::terminate() noexcept
@@ -129,6 +132,11 @@ void GPUSort::terminate() noexcept
     scratchBuffer = {};
     gfxDestroyBuffer(gfx, reducedScratchBuffer);
     reducedScratchBuffer = {};
+
+    gfxDestroyBuffer(gfx, sourcePongBuffer);
+    sourcePongBuffer = {};
+    gfxDestroyBuffer(gfx, payloadPongBuffer);
+    payloadPongBuffer = {};
 
     gfxDestroyProgram(gfx, sortProgram);
     sortProgram = {};
@@ -192,7 +200,7 @@ void GPUSort::sortSegmented(
 void GPUSort::sortPayloadSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys,
     const uint maxNumKeys, GfxBuffer const &sourcePayload) noexcept
 {
-    sortInternalSegmented(sourceBuffer, numKeys, maxNumKeys, -1, nullptr, &sourcePayload);
+    sortInternalSegmented(sourceBuffer, numKeys, maxNumKeys, UINT_MAX, nullptr, &sourcePayload);
 }
 
 void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys, GfxBuffer const *numKeys,

@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -71,6 +71,40 @@ float3 convertYCoCgToRGB(float3 color)
     return float3(color.rrr
         + color.ggg * float3(1.0f, 0.0f, -1.0f)
         + color.bbb * float3(-1.0f, 1.0f, -1.0f));
+}
+
+/**
+ * Encode a value using ITU Rec2100 Perceptual Quantizer (PQ) EOTF.
+ * @param value Input value to encode.
+ * @return The converted luminance value.
+ */
+float encodePQEOTF(float value)
+{
+    const float c1 = 0.8359375f;
+    const float c2 = 18.8515625f;
+    const float c3 = 18.6875f;
+    const float m1 = 0.1593017578125f;
+    const float m2 = 78.84375f;
+
+    float powM2 = pow(value, 1.0f / m2);
+    return pow(max(powM2 - c1, 0) / (c2 - c3 * powM2), 1.0f / m1);
+}
+
+/**
+ * Decode a value using ITU Rec2100 Perceptual Quantizer (PQ) EOTF.
+ * @param value Input value (should be luminance) to decode.
+ * @return The converted value.
+ */
+float decodePQEOTF(float value)
+{
+    const float c1 = 0.8359375f;
+    const float c2 = 18.8515625f;
+    const float c3 = 18.6875f;
+    const float m1 = 0.1593017578125f;
+    const float m2 = 78.84375f;
+
+    float powM1 = pow(value, m1);
+    return pow((c1 + c2 * powM1) / (1.0f + c3 * powM1), m2);
 }
 
 /**

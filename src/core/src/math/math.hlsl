@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,8 +27,9 @@ THE SOFTWARE.
 
 /**
  * Clamps a value between (0, 1].
- * @note This prevents values form being clamped to exactly zero but instead to near zero
- * @return The clamped value.
+ * @note This prevents values form being clamped to exactly zero but instead to near zero.
+ * @param value Value to clamp.
+ * @returns The clamped value.
  */
 float clampRange(float value)
 {
@@ -41,8 +42,9 @@ float3 clampRange(float3 value)
 
 /**
  * Clamps a value to be greater than epsilon.
- * @note This prevents values form being clamped to exactly zero but instead to near zero
- * @return The clamped value.
+ * @note This prevents values form being clamped to exactly zero but instead to near zero.
+ * @param value Value to clamp.
+ * @returns The clamped value.
  */
 float clampMax(float value)
 {
@@ -53,15 +55,28 @@ float3 clampMax(float3 value)
     return max(FLT_EPSILON.xxx, value);
 }
 
-
+/**
+ * Raises a value to the power of 2 i.e. squared.
+ * @param value Value to square.
+ * @returns The squared value.
+ */
 float squared(const float value)
 {
     return value * value;
 }
-
 float3 squared(const float3 value)
 {
     return value * value;
+}
+
+/**
+ * Get the squared length of a vector.
+ * @param value Value to get squared length from.
+ * @returns The squared value.
+ */
+float lengthSqr(const float3 value)
+{
+    return dot(value, value);
 }
 
 float2 ndcToUv(const float2 ndc)
@@ -74,12 +89,27 @@ float2 uvToNdc(const float2 uv)
     return float2(uv.x, 1.0f - uv.y) * 2.0f - 1.0f;
 }
 
+/**
+ * Get the squared distance between 2 points.
+ * @param a The first point.
+ * @param b The second point.
+ * @returns The squared distance.
+ */
 float distanceSqr(float3 a, float3 b)
 {
     float3 c = a - b;
     return dot(c, c);
 }
 
+/**
+ * Get the largest value of all elements in a vector.
+ * @param val The input vector.
+ * @returns The largest value.
+ */
+float hmax(float2 val)
+{
+    return max(val.x, val.y);
+}
 float hmax(float3 val)
 {
     return max(val.x, max(val.y, val.z));
@@ -89,6 +119,15 @@ float hmax(float4 val)
     return max(max(val.x, val.z), max(val.y, val.w));
 }
 
+/**
+ * Get the smallest value of all elements in a vector.
+ * @param val The input vector.
+ * @returns The smallest value.
+ */
+float hmin(float2 val)
+{
+    return min(val.x, val.y);
+}
 float hmin(float3 val)
 {
     return min(val.x, min(val.y, val.z));
@@ -96,6 +135,24 @@ float hmin(float3 val)
 float hmin(float4 val)
 {
     return min(min(val.x, val.z), min(val.y, val.w));
+}
+
+/**
+ * Sum all elements of a vector.
+ * @param val The input vector.
+ * @returns The combined value.
+ */
+float hadd(float2 val)
+{
+    return val.x + val.y;
+}
+float hadd(float3 val)
+{
+    return val.x + val.y + val.z;
+}
+float hadd(float4 val)
+{
+    return val.x + val.y + val.z + val.w;
 }
 
 #if __HLSL_VERSION < 2021

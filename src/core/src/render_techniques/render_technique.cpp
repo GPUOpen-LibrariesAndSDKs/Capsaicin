@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -50,5 +50,10 @@ AOVList RenderTechnique::getAOVs() const noexcept
 DebugViewList RenderTechnique::getDebugViews() const noexcept
 {
     return {};
+}
+
+void RenderTechnique::renderGUI(CapsaicinInternal &capsaicin) const noexcept
+{
+    (void)&capsaicin;
 }
 } // namespace Capsaicin

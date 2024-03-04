@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -71,7 +71,7 @@ void Skybox::render(CapsaicinInternal &capsaicin) noexcept
     gfxCommandDraw(gfx_, 3);
 }
 
-void Skybox::terminate()
+void Skybox::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, skybox_program_);
     gfxDestroyKernel(gfx_, skybox_kernel_);

@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -57,8 +57,8 @@ class Random
      */
     float rand()
     {
-        // Note: Uses 4294967808 instead of 2^32 in order to ensure [0.0, 1.0) mapping due to floating point rounding error.
-        float ret = (float)randInt() * (1.0f / 4294967808.0f);
+        // Note: Use the upper 24 bits to avoid a bias due to floating point rounding error.
+        float ret = (float)(randInt() >> 8) * 0x1.0p-24f;
         return ret;
     }
 

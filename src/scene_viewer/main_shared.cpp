@@ -1,5 +1,5 @@
-/**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+﻿/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,6 +27,7 @@ THE SOFTWARE.
 #include <chrono>
 #include <cmath>
 #include <gfx_imgui.h>
+#include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <ranges>
 #include <version.h>
@@ -57,45 +58,45 @@ struct KeyboardMapping
     uint32_t downX;
     uint32_t upY;
     uint32_t downY;
-    uint32_t exit;
-    uint32_t pause;
 };
 
 KeyboardMapping keyboardMappings[] = {
-    {0x57 /*W*/, 0x53 /*S*/, 0x44 /*D*/, 0x41 /*A*/,       0x45 /*E*/,         0x51 /*Q*/, 0x1B /*Esc*/,0x20 /*Space*/    },
-    {0x5A /*Z*/, 0x53 /*S*/, 0x44 /*D*/, 0x51 /*Q*/, 0x21 /*Page Up*/, 0x22 /*Page Down*/, 0x1B /*Esc*/,
-     0x20 /*Space*/}
+    {0x57 /*W*/, 0x53 /*S*/, 0x44 /*D*/, 0x41 /*A*/,       0x45 /*E*/,         0x51 /*Q*/},
+    {0x5A /*Z*/, 0x53 /*S*/, 0x44 /*D*/, 0x51 /*Q*/, 0x21 /*Page Up*/, 0x22 /*Page Down*/}
 };
 
 /** Data required to represent each supported scene file */
 struct SceneData
 {
-    string_view name;
-    string_view fileName;
-    bool        useEnvironmentMap;
-    float       renderExposure;
+    std::string              name;
+    std::vector<std::string> fileNames;
+    bool                     useEnvironmentMap;
+    float                    renderExposure;
 };
 
 /** List of supported scene files and associated data */
 static vector<SceneData> const scenes = {
-    {      "Flying World",
-     "assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god/FlyingWorld-BattleOfTheTrashGod.gltf",  true, 2.5f},
-    {       "Gas Station",                         "assets/CapsaicinTestMedia/gas_station/GasStation.gltf",  true, 1.5f},
-    {  "Tropical Bedroom",               "assets/CapsaicinTestMedia/tropical_bedroom/TropicalBedroom.gltf",  true, 2.0f},
+    {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f                                                                                                          },
+    {"Gas Station",                                                   {"assets/CapsaicinTestMedia/gas_station/GasStation.gltf"},  true, 1.0f},
+    {"Tropical Bedroom",                                    {"assets/CapsaicinTestMedia/tropical_bedroom/TropicalBedroom.gltf"},  true, 1.0f},
+    {"Sponza",                                                                 {"assets/CapsaicinTestMedia/sponza/Sponza.gltf"},  true, 5.0f},
+    {"Breakfast Room",                                          {"assets/CapsaicinTestMedia/breakfast_room/BreakfastRoom.gltf"},  true, 3.0f},
 };
 
 /** List of supported environment maps */
 static vector<pair<string_view, string_view>> const sceneEnvironmentMaps = {
-    {                    "None",                                         ""                                },
-    {"Photo Studio London Hall",
-     "assets/CapsaicinTestMedia/environment_maps/photo_studio_london_hall_4k.hdr"                          },
-    {              "Kiara Dawn",           "assets/CapsaicinTestMedia/environment_maps/kiara_1_dawn_4k.hdr"},
-    {        "Nagoya Wall Path",       "assets/CapsaicinTestMedia/environment_maps/nagoya_wall_path_4k.hdr"},
-    {        "Spaichingen Hill",       "assets/CapsaicinTestMedia/environment_maps/spaichingen_hill_4k.hdr"},
-    {            "Studio Small",        "assets/CapsaicinTestMedia/environment_maps/studio_small_08_4k.hdr"},
-    {                   "White",                     "assets/CapsaicinTestMedia/environment_maps/white.hdr"},
-    {              "Atmosphere",                                                                         ""},
+    {                    "None",                                                                     ""},
+    {"Photo Studio London Hall", "assets/CapsaicinTestMedia/environment_maps/PhotoStudioLondonHall.hdr"},
+    {              "Kiara Dawn",             "assets/CapsaicinTestMedia/environment_maps/KiaraDawn.hdr"},
+    {        "Nagoya Wall Path",        "assets/CapsaicinTestMedia/environment_maps/NagoyaWallPath.hdr"},
+    {        "Spaichingen Hill",       "assets/CapsaicinTestMedia/environment_maps/SpaichingenHill.hdr"},
+    {            "Studio Small",           "assets/CapsaicinTestMedia/environment_maps/StudioSmall.hdr"},
+    {                   "White",                 "assets/CapsaicinTestMedia/environment_maps/White.hdr"},
+    {              "Atmosphere",                                                                     ""},
 };
+
+/** List of executable relative file paths to search for scene files */
+static vector<string> const sceneDirectories = {"", "../../../", "../../", "../"};
 
 CapsaicinMain::CapsaicinMain(string_view &&programNameIn) noexcept
     : programName(forward<string_view>(programNameIn))
@@ -106,7 +107,6 @@ CapsaicinMain::~CapsaicinMain() noexcept
     // Destroy Capsaicin context
     gfxImGuiTerminate();
     Capsaicin::Terminate();
-    gfxDestroyScene(sceneData);
 
     gfxDestroyContext(contextGFX);
     gfxDestroyWindow(window);
@@ -127,63 +127,74 @@ bool CapsaicinMain::run() noexcept
     }
 
     // Render frames continuously
-    while (renderFrame())
+    while (true)
     {
-        // Check for change
-        if (updateRenderer)
-        {
-            setRenderer();
-            updateRenderer = false;
-        }
-        if (updateScene)
-        {
-            if (!loadScene())
-            {
-                return false;
-            }
-            updateScene = false;
-        }
-        if (updateEnvironmentMap)
-        {
-            if (!setEnvironmentMap())
-            {
-                return false;
-            }
-            updateEnvironmentMap = false;
-        }
-        if (updateCamera)
-        {
-            setCamera();
-            updateCamera = false;
-        }
-
         // Check benchmark mode run
         if (benchmarkMode)
         {
             // If current frame has reached our benchmark value then dump frame
-            if (Capsaicin::GetFrameIndex() == benchmarkModeFrameCount)
+            if (Capsaicin::GetFrameIndex() >= benchmarkModeFrameCount)
+            {
+                // Needed to wait a single render pass for the frame saving to complete before closing
+                break;
+            }
+            else if (Capsaicin::GetFrameIndex() >= benchmarkModeStartFrame)
             {
                 saveFrame();
             }
-            else if (Capsaicin::GetFrameIndex() > benchmarkModeFrameCount)
-            {
-                // Need to wait a single render pass for the frame saving to complete before closing
-                return true;
-            }
+        }
+        if (!renderFrame())
+        {
+            return true;
+        }
+    }
+
+    if (benchmarkMode && !benchmarkModeSuffix.empty() && Capsaicin::hasOption<bool>("image_metrics_enable")
+        && Capsaicin::getOption<bool>("image_metrics_enable")
+        && Capsaicin::getOption<bool>("image_metrics_save_to_file"))
+    {
+        // Flush remaining stats
+        for (uint32_t i = 0; i <= gfxGetBackBufferCount(contextGFX); ++i)
+        {
+            Capsaicin::Render();
+            gfxFrame(contextGFX);
+        }
+        // Force finalising metrics file
+        Capsaicin::setOption<bool>("image_metrics_enable", false);
+        Capsaicin::Render();
+        // Rename metrics file to also contain suffix
+        auto        savePath       = getSaveName();
+        std::string newMetricsFile = savePath + '_' + benchmarkModeSuffix + ".csv";
+        std::remove(newMetricsFile.c_str());
+        std::string metricsFile = savePath + ".csv";
+        if (std::rename(metricsFile.c_str(), newMetricsFile.c_str()) != 0)
+        {
+            printString("Failed to rename image metrics file: "s + metricsFile, MessageLevel::Warning);
         }
     }
 
     return true;
 }
 
-void CapsaicinMain::printString(std::string const &text) noexcept
+void CapsaicinMain::printString(std::string const &text, MessageLevel level) noexcept
 {
+    std::string outputText;
+    switch (level)
+    {
+    case MessageLevel::Debug: break;
+    case MessageLevel::Info: break;
+    case MessageLevel::Warning: outputText = "Warning: "; break;
+    case MessageLevel::Error: outputText = "Error: "; [[fallthrough]];
+    default: break;
+    }
+    outputText += text;
+
     // Check if a debugger is attached and use it instead of a console
     // If no debugger is attached then we need to attach to a console process in order to be able to
     // output text
     if (IsDebuggerPresent())
     {
-        OutputDebugStringA(text.c_str());
+        OutputDebugStringA(outputText.c_str());
     }
     else
     {
@@ -196,73 +207,88 @@ void CapsaicinMain::printString(std::string const &text) noexcept
                 // Set the screen buffer big enough to hold at least help text
                 CONSOLE_SCREEN_BUFFER_INFO scInfo;
                 GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &scInfo);
-                {
-                    // Force the console buffer to be resized no matter what as this forces the console to
-                    // update the end line to match the number of printed lines from this app
-                    constexpr int16_t minLength = 4096;
-                    scInfo.dwSize.Y             = std::max(minLength, (short)(scInfo.dwSize.Y + 1));
-                    SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), scInfo.dwSize);
-                }
 
+                // Force the console buffer to be resized no matter what as this forces the console to
+                // update the end line to match the number of printed lines from this app
+                constexpr int16_t minLength = 4096;
+                scInfo.dwSize.Y             = std::max(minLength, (short)(scInfo.dwSize.Y + 100));
+                SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), scInfo.dwSize);
                 hasConsole = true;
             }
-            else
-            {
-                return;
-            }
         }
-        // The parent console has already printed a new user prompt before this program has even run so
-        // need to insert any printed lines before the existing user prompt
-
-        // Save current cursor position
-        CONSOLE_SCREEN_BUFFER_INFO scInfo;
-        GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &scInfo);
-        auto cursorPosY = scInfo.dwCursorPosition.Y;
-        auto cursorPosX = scInfo.dwCursorPosition.X;
-
-        // Move to start of current line
-        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {0, cursorPosY});
-
-        // Insert new line into console buffer
-        std::vector<CHAR_INFO> buffer;
-        buffer.resize(cursorPosX * sizeof(CHAR_INFO));
-        COORD      coordinates = {0};
-        SMALL_RECT textRegion  = {
-             .Left   = 0,
-             .Top    = cursorPosY,
-             .Right  = (short)(cursorPosX - 1),
-             .Bottom = cursorPosY,
-        };
-        COORD bufferSize = {
-            .X = cursorPosX,
-            .Y = 1,
-        };
-        ReadConsoleOutputA(
-            GetStdHandle(STD_OUTPUT_HANDLE), buffer.data(), bufferSize, coordinates, &textRegion);
-        DWORD dnc;
-        FillConsoleOutputCharacter(GetStdHandle(STD_OUTPUT_HANDLE), ' ', cursorPosX, {0, cursorPosY}, &dnc);
-        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {0, cursorPosY});
-
-        // Write out each new line from the input text
-        uint32_t lines = 0;
-        for (auto const i : std::views::split(text, '\n'))
+        if (hasConsole)
         {
-            DWORD dnc;
-            WriteConsoleA(GetStdHandle(STD_OUTPUT_HANDLE), &*i.begin(), (DWORD)i.size(), &dnc, 0);
-            WriteConsoleA(GetStdHandle(STD_OUTPUT_HANDLE), "\n", 1, &dnc, 0);
-            ++lines;
-        }
+            // The parent console has already printed a new user prompt before this program has even run so
+            // need to insert any printed lines before the existing user prompt
 
-        // Restore cursor position to previously saved state and increment by number of new lines
-        textRegion = {
-            .Left   = 0,
-            .Top    = (short)(cursorPosY + lines),
-            .Right  = (short)(cursorPosX - 1),
-            .Bottom = (short)(cursorPosY + lines),
-        };
-        WriteConsoleOutput(
-            GetStdHandle(STD_OUTPUT_HANDLE), buffer.data(), bufferSize, coordinates, &textRegion);
-        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {cursorPosX, short(cursorPosY + lines)});
+            // Save current cursor position
+            CONSOLE_SCREEN_BUFFER_INFO scInfo;
+            GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &scInfo);
+            auto cursorPosY = scInfo.dwCursorPosition.Y;
+            auto cursorPosX = scInfo.dwCursorPosition.X;
+
+            // Move to start of current line
+            SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {0, cursorPosY});
+
+            // Insert new line into console buffer
+            std::vector<CHAR_INFO> buffer;
+            buffer.resize(cursorPosX);
+            COORD      coordinates = {0};
+            SMALL_RECT textRegion  = {
+                 .Left   = 0,
+                 .Top    = cursorPosY,
+                 .Right  = (short)(cursorPosX - 1),
+                 .Bottom = cursorPosY,
+            };
+            COORD bufferSize = {
+                .X = cursorPosX,
+                .Y = 1,
+            };
+
+            ReadConsoleOutputA(
+                GetStdHandle(STD_OUTPUT_HANDLE), buffer.data(), bufferSize, coordinates, &textRegion);
+            DWORD dnc;
+            FillConsoleOutputCharacter(
+                GetStdHandle(STD_OUTPUT_HANDLE), ' ', cursorPosX, {0, cursorPosY}, &dnc);
+
+            // Set the screen buffer big enough to hold new lines
+            std::vector<std::string_view> textLines;
+            for (auto const i : std::views::split(outputText, '\n'))
+            {
+                textLines.emplace_back(i.begin(), i.end());
+            }
+
+            // Write out each new line from the input text
+            SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {0, cursorPosY});
+            uint32_t lines = 0;
+            for (auto const &i : textLines)
+            {
+                auto lineWidth = i.size();
+                if (lineWidth > 0)
+                {
+                    WriteConsoleOutputCharacterA(GetStdHandle(STD_OUTPUT_HANDLE), &*i.begin(),
+                        (DWORD)lineWidth, {0, short(cursorPosY + lines)}, &dnc);
+                    ++lines;
+                    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), {0, short(cursorPosY + lines)});
+                }
+            }
+
+            // Restore cursor position to previously saved state and increment by number of new lines
+            textRegion = {
+                .Left   = 0,
+                .Top    = (short)(cursorPosY + lines),
+                .Right  = (short)(cursorPosX - 1),
+                .Bottom = (short)(cursorPosY + lines),
+            };
+            WriteConsoleOutputA(
+                GetStdHandle(STD_OUTPUT_HANDLE), buffer.data(), bufferSize, coordinates, &textRegion);
+            SetConsoleCursorPosition(
+                GetStdHandle(STD_OUTPUT_HANDLE), {cursorPosX, short(cursorPosY + lines)});
+        }
+    }
+    if (level == MessageLevel::Error)
+    {
+        MessageBoxA(nullptr, text.c_str(), "Error", MB_OK | MB_ICONEXCLAMATION | MB_TASKMODAL);
     }
 }
 
@@ -278,31 +304,56 @@ bool CapsaicinMain::initialise() noexcept
     app.allow_config_extras(CLI::config_extras_mode::error);
     app.add_option("--width", windowWidth, "Window width")->capture_default_str();
     app.add_option("--height", windowHeight, "Window height")->capture_default_str();
-    uint32_t sceneSelect = static_cast<uint32_t>(scene);
+    uint32_t sceneSelect = static_cast<uint32_t>(defaultScene);
     app.add_option("--start-scene-index", sceneSelect, "Start scene index")
         ->capture_default_str()
         ->check(CLI::Range(0u, (uint32_t)scenes.size() - 1));
-    uint32_t envMapSelect = static_cast<uint32_t>(environmentMap);
+    uint32_t envMapSelect = static_cast<uint32_t>(defaultEnvironmentMap);
     app.add_option("--start-environment-map-index", envMapSelect, "Start environment map index")
         ->capture_default_str()
         ->check(CLI::Range(0u, (uint32_t)sceneEnvironmentMaps.size() - 1));
     auto     renderers        = Capsaicin::GetRenderers();
-    auto     rendererSelectIt = find(renderers.begin(), renderers.end(), renderSettings.renderer_);
+    auto     rendererSelectIt = find(renderers.begin(), renderers.end(), Capsaicin::GetCurrentRenderer());
     uint32_t rendererSelect   = 0;
     if (rendererSelectIt != renderers.end())
     {
         rendererSelect = static_cast<uint32_t>(rendererSelectIt - renderers.begin());
     }
+    else
+    {
+        rendererSelectIt = find(renderers.begin(), renderers.end(), defaultRenderer);
+        if (rendererSelectIt != renderers.end())
+        {
+            rendererSelect = static_cast<uint32_t>(rendererSelectIt - renderers.begin());
+        }
+    }
     app.add_option("--start-renderer-index", rendererSelect, "Start renderer index")
         ->capture_default_str()
         ->check(CLI::Range(0u, (uint32_t)renderers.size() - 1));
-    uint32_t cameraSelect = cameraIndex;
+    uint32_t cameraSelect = uint32_t(-1);
     app.add_option("--start-camera-index", cameraSelect, "Start camera index");
+    std::vector<float> cameraPosition;
+    app.add_option("--user-camera-position", cameraPosition, "Set the initial position of the user camera");
+    std::vector<float> cameraLookAt;
+    app.add_option(
+        "--user-camera-lookat", cameraLookAt, "Set the initial look at position of the user camera");
+    bool startPlaying = false;
+    app.add_flag("--start-playing", startPlaying, "Start with any animations running");
     auto bench = app.add_flag("--benchmark-mode", benchmarkMode, "Enable benchmarking mode");
     app.add_option(
            "--benchmark-frames", benchmarkModeFrameCount, "Number of frames to render during benchmark mode")
         ->needs(bench)
         ->capture_default_str();
+    app.add_option("--benchmark-first-frame", benchmarkModeStartFrame,
+           "The first frame to start saving images from (Default just the last frame)")
+        ->needs(bench)
+        ->capture_default_str();
+    app.add_option("--benchmark-suffix", benchmarkModeSuffix, "Suffix to add to any saved filenames")
+        ->needs(bench)
+        ->capture_default_str();
+
+    std::vector<std::string> renderOptions;
+    app.add_option("--render-options", renderOptions, "Additional render options");
 
     bool listScene = false;
     app.add_flag("--list-scenes", listScene, "List all available scenes and corresponding indexes");
@@ -335,7 +386,7 @@ bool CapsaicinMain::initialise() noexcept
             return false;
         }
 
-        printString("Command Line Error: "s + ((exception)e).what());
+        printString("Command Line Error: "s + ((exception)e).what(), MessageLevel::Error);
         return false;
     }
 
@@ -368,61 +419,18 @@ bool CapsaicinMain::initialise() noexcept
         return false;
     }
 
-    // Setup passed in values
-    scene                    = static_cast<Scene>(sceneSelect);
-    environmentMap           = static_cast<EnvironmentMap>(envMapSelect);
-    renderSettings.renderer_ = renderers[rendererSelect];
-
     // Create the internal gfx window and context
     window = gfxCreateWindow(windowWidth, windowHeight, programName.data());
     if (!window)
     {
         return false;
     }
-    if (!reset())
-    {
-        return false;
-    }
-
-    // Initialise render settings
-    setRenderer();
-
-    // Load the requested start scene
-    if (!loadScene())
-    {
-        return false;
-    }
-
-    // Check the passed in camera index
-    if (cameraIndex != cameraSelect)
-    {
-        if (cameraSelect >= gfxSceneGetCameraCount(sceneData))
-        {
-            printString("Invalid value passed in for '--start-camera-index'");
-            return false;
-        }
-        cameraIndex = cameraSelect;
-        setCamera();
-    }
-
-    return true;
-}
-
-bool CapsaicinMain::reset() noexcept
-{
-    // Restart capsaicin to prevent resource issues on change
-    //  - this prevents freezes due to capsaicin not releasing resources properly
-    if (contextGFX)
-    {
-        gfxImGuiTerminate();
-        Capsaicin::Terminate();
-        gfxDestroyContext(contextGFX);
-    }
 
     contextGFX = gfxCreateContext(
-        window, kGfxCreateContextFlag_EnableStablePowerState
-#if _DEBUG
-                    | kGfxCreateContextFlag_EnableDebugLayer | kGfxCreateContextFlag_EnableShaderDebugging
+        window, 0
+#if _DEBUG || defined(SHADER_DEBUG)
+                    | kGfxCreateContextFlag_EnableStablePowerState | kGfxCreateContextFlag_EnableDebugLayer
+                    | kGfxCreateContextFlag_EnableShaderDebugging
 #endif
     );
     if (!contextGFX)
@@ -430,270 +438,327 @@ bool CapsaicinMain::reset() noexcept
         return false;
     }
 
+    // Create ImGui context using additional needed fonts
+    char const  *fonts[] = {"C:\\Windows\\Fonts\\seguisym.ttf"};
+    ImFontConfig fontConfigs[1];
+    fontConfigs[0].MergeMode           = true;
+    static const ImWchar glyphRanges[] = {
+        0x2310,
+        0x23FF, // Media player icons
+        0x1F500,
+        0x1F505, // Restart icon
+        0,
+    };
+    fontConfigs[0].GlyphRanges = &glyphRanges[0];
+    fontConfigs[0].SizePixels  = 30.0f;
+    fontConfigs[0].GlyphOffset.y += 5.0f; // Need to offset glyphs downward to properly center them
+    if (auto err = gfxImGuiInitialize(contextGFX, fonts, 1, fontConfigs); err != kGfxResult_NoError)
+    {
+        return false;
+    }
+
     // Create Capsaicin render context
-    Capsaicin::Initialize(contextGFX);
-    if (auto err = gfxImGuiInitialize(contextGFX); err != kGfxResult_NoError)
+    Capsaicin::Initialize(contextGFX, ImGui::GetCurrentContext());
+
+    // Initialise render settings
+    if (!setRenderer(renderers[rendererSelect]))
     {
         return false;
     }
 
-    // Reset render settings animation state
-    Capsaicin::SetSequenceTime(0.0);
-    restartAnimation();
-    setAnimation(false);
-
-    // Reset frame graph
-    frameGraph.reset();
-
-    // Reset time
-    auto wallClock =
-        chrono::duration_cast<chrono::microseconds>(chrono::high_resolution_clock::now().time_since_epoch());
-    previousTime = wallClock.count() / 1000000.0;
-    currentTime  = previousTime;
-    frameTime    = 0.0f;
-
-    // Reset camera movement
-    cameraTranslation = vec3(0.0f);
-    cameraRotation    = vec2(0.0f);
-
-    return true;
-}
-
-bool CapsaicinMain::loadScene() noexcept
-{
-    // Clear any pre-existing scene data
-    if (sceneData)
+    // Pass any command line render options
+    if (!renderOptions.empty())
     {
-        gfxDestroyScene(sceneData);
-        if (!reset())
+        auto &validOpts = Capsaicin::GetOptions();
+        for (auto const &opt : renderOptions)
         {
-            return false;
-        }
-    }
-    renderSettings.environment_map_ = {};
-    // Create new blank scene
-    sceneData = gfxCreateScene();
-    if (!sceneData)
-    {
-        return false;
-    }
-
-    // Create default user camera
-    auto userCamera    = gfxSceneCreateCamera(sceneData);
-    userCamera->eye    = {0.0f, 0.0f, -1.0f};
-    userCamera->center = {0.0f, 0.0f, 0.0f};
-    userCamera->up     = {0.0f, 1.0f, 0.0f};
-
-    // Load in environment map based on current settings
-    if (scenes[static_cast<uint32_t>(scene)].useEnvironmentMap)
-    {
-        if (!setEnvironmentMap())
-        {
-            return false;
-        }
-    }
-    // Load in scene based on current requested scene index
-    if (gfxSceneImport(sceneData, scenes[static_cast<uint32_t>(scene)].fileName.data()) != kGfxResult_NoError)
-    {
-        return false;
-    }
-
-    if (!scenes[static_cast<uint32_t>(scene)].useEnvironmentMap)
-    {
-        // Load a null image
-        renderSettings.environment_map_ = GfxConstRef<GfxImage>();
-    }
-
-    setSceneRenderOptions(true);
-
-    // Set up camera based on internal scene data
-    cameraIndex = 0;
-    if (gfxSceneGetCameraCount(sceneData) > 1)
-    {
-        cameraIndex = 1; // Use first scene camera
-        // Try and find 'Main' camera
-        for (uint32_t i = 1; i < gfxSceneGetCameraCount(sceneData); ++i)
-        {
-            auto        cameraHandle = gfxSceneGetCameraHandle(sceneData, i);
-            string_view cameraName   = gfxSceneGetCameraMetadata(sceneData, cameraHandle).getObjectName();
-            if (cameraName.find("Main"sv) != string::npos)
+            auto const splitLoc = opt.find('=');
+            if (splitLoc == std::string::npos)
             {
-                cameraIndex = i;
+                printString("Invalid command line format of '--render-options'", MessageLevel::Error);
+                return false;
+            }
+            std::string option = opt.substr(0, splitLoc);
+            std::string value  = opt.substr(splitLoc + 1);
+            if (auto found = validOpts.find(option); found != validOpts.end())
+            {
+                if (std::holds_alternative<bool>(found->second))
+                {
+                    if (value == "true" || value == "1")
+                    {
+                        Capsaicin::setOption(option, true);
+                    }
+                    else if (value == "false" || value == "0")
+                    {
+                        Capsaicin::setOption(option, false);
+                    }
+                    else
+                    {
+                        printString("Invalid command line value passed for render option '" + option
+                                        + "' expected bool",
+                            MessageLevel::Error);
+                        return false;
+                    }
+                }
+                else if (std::holds_alternative<int32_t>(found->second))
+                {
+                    try
+                    {
+                        const int32_t newValue = std::stoi(value);
+                        Capsaicin::setOption(option, newValue);
+                    }
+                    catch (...)
+                    {
+                        printString("Invalid command line value passed for render option '" + option
+                                        + "' expected integer",
+                            MessageLevel::Error);
+                        return false;
+                    }
+                }
+                else if (std::holds_alternative<uint32_t>(found->second))
+                {
+                    try
+                    {
+                        const uint32_t newValue = std::stoul(value);
+                        Capsaicin::setOption(option, newValue);
+                    }
+                    catch (...)
+                    {
+                        printString("Invalid command line value passed for render option '" + option
+                                        + "' expected unsigned integer",
+                            MessageLevel::Error);
+                        return false;
+                    }
+                }
+                else if (std::holds_alternative<float>(found->second))
+                {
+                    try
+                    {
+                        float const newValue = std::stof(value);
+                        Capsaicin::setOption(option, newValue);
+                    }
+                    catch (...)
+                    {
+                        printString("Invalid command line value passed for render option '" + option
+                                        + "' expected float",
+                            MessageLevel::Error);
+                        return false;
+                    }
+                }
+            }
+            else
+            {
+                printString(
+                    "Invalid command line value passed for '--render-options': " + opt, MessageLevel::Error);
+                return false;
             }
         }
-        // Set user camera equal to first camera
-        auto defaultCamera = gfxSceneGetCameraHandle(sceneData, cameraIndex);
-        userCamera->eye    = defaultCamera->eye;
-        userCamera->center = defaultCamera->center;
-        userCamera->up     = defaultCamera->up;
     }
-    setCamera();
 
-    // Calculate some scene stats
-    triangleCount = 0;
-    for (uint32_t i = 0; i < gfxSceneGetObjectCount<GfxInstance>(sceneData); ++i)
+    // Load the requested start scene
+    if (!loadScene(static_cast<Scene>(sceneSelect)))
     {
-        if (gfxSceneGetObjects<GfxInstance>(sceneData)[i].mesh)
+        return false;
+    }
+
+    // Set environment map (must be done after scene load as environment maps are attached to scenes)
+    auto const environmentMap = scenes[static_cast<uint32_t>(sceneSelect)].useEnvironmentMap
+                                  ? static_cast<EnvironmentMap>(envMapSelect)
+                                  : EnvironmentMap::None;
+    if (!setEnvironmentMap(environmentMap))
+    {
+        return false;
+    }
+
+    // Check the passed in camera index
+    if (cameraSelect != -1)
+    {
+        auto const cameras = Capsaicin::GetSceneCameras();
+        if (cameraSelect >= cameras.size())
         {
-            GfxMesh const &mesh = *gfxSceneGetObjects<GfxInstance>(sceneData)[i].mesh;
-            triangleCount += (uint32_t)(mesh.indices.size() / 3);
+            printString(
+                "Invalid command line value passed in for '--start-camera-index'", MessageLevel::Error);
+            return false;
         }
+        if (cameraSelect == 0)
+        {
+            // Copy scene settings from any existing scene camera
+            auto oldCamera = Capsaicin::GetSceneCamera();
+            setCamera(cameras[cameraSelect]);
+            auto camera = Capsaicin::GetSceneCamera();
+            *camera     = *oldCamera;
+        }
+        else
+        {
+            setCamera(cameras[cameraSelect]);
+        }
+    }
+
+    // Check any initial user camera values
+    if (!cameraPosition.empty() || !cameraLookAt.empty())
+    {
+        if (cameraSelect == 0)
+        {
+            auto camera = &*Capsaicin::GetSceneCamera();
+            camera->up  = glm::vec3(0.0f, 1.0f, 0.0f);
+            if (cameraPosition.size() == 3)
+            {
+                camera->eye = glm::vec3(cameraPosition[0], cameraPosition[1], cameraPosition[2]);
+            }
+            else if (!cameraPosition.empty())
+            {
+                printString(
+                    "Invalid command line value passed in for '--user-camera-position' must be in the form '0.0 0.0 0.0'",
+                    MessageLevel::Error);
+                return false;
+            }
+            if (cameraLookAt.size() == 3)
+            {
+                camera->center = glm::vec3(cameraLookAt[0], cameraLookAt[1], cameraLookAt[2]);
+            }
+            else if (!cameraLookAt.empty())
+            {
+                printString(
+                    "Invalid command line value passed in for '--user-camera-lookat' must be in the form '0.0 0.0 0.0'",
+                    MessageLevel::Error);
+                return false;
+            }
+        }
+        else
+        {
+            printString(
+                "Command line values for '--user-camera-position' and '--user-camera-lookat' only take effect if start camera index is set to user camera '0'",
+                MessageLevel::Warning);
+        }
+    }
+
+    if (benchmarkMode)
+    {
+        benchmarkModeStartFrame = std::min(benchmarkModeStartFrame, benchmarkModeFrameCount - 1);
+        // Benchmark mode uses a fixed frame rate playback mode
+        Capsaicin::SetFixedFrameRate(true);
+    }
+
+    if (startPlaying)
+    {
+        Capsaicin::SetPaused(false);
     }
 
     return true;
 }
 
-void CapsaicinMain::setCamera() noexcept
+bool CapsaicinMain::loadScene(Scene scene) noexcept
+{
+    // Check that scene file is locatable
+    error_code ec;
+
+    auto const              &sceneData  = scenes[static_cast<uint32_t>(scene)];
+    auto const              &sceneNames = sceneData.fileNames;
+    std::vector<std::string> scenePaths;
+
+    for (auto const &sceneDirectory : sceneDirectories)
+    {
+        scenePaths.clear();
+        for (auto const &sceneName : sceneNames)
+        {
+            string scenePath = sceneDirectory + sceneName;
+            if (!std::filesystem::exists(scenePath, ec))
+            {
+                break;
+            }
+
+            scenePaths.push_back(scenePath);
+        }
+
+        // All scenes exist, load them
+        if (scenePaths.size() == sceneNames.size()) break;
+    }
+
+    if (scenePaths.size() != sceneNames.size())
+    {
+        printString("Failed to find all requested files for scene: "s + sceneData.name, MessageLevel::Error);
+        return false;
+    }
+    else if (!Capsaicin::SetScenes(scenePaths))
+    {
+        return false;
+    }
+
+    // Set render settings based on current scene
+    Capsaicin::setOption("tonemap_exposure", sceneData.renderExposure);
+    currentScene = scene;
+    return true;
+}
+
+void CapsaicinMain::setCamera(std::string_view camera) noexcept
 {
     // Set the camera to the currently requested camera index
-    GFX_ASSERT(cameraIndex < gfxSceneGetCameraCount(sceneData));
-    camera         = gfxSceneGetCameraHandle(sceneData, cameraIndex);
-    camera->aspect = static_cast<float>(gfxGetBackBufferWidth(contextGFX))
-                   / static_cast<float>(gfxGetBackBufferHeight(contextGFX));
-    gfxSceneSetActiveCamera(sceneData, camera);
+    Capsaicin::SetSceneCamera(camera);
 
     // Reset camera movement data
     cameraTranslation = glm::vec3(0.0f);
     cameraRotation    = glm::vec2(0.0f);
 }
 
-bool CapsaicinMain::setEnvironmentMap() noexcept
+bool CapsaicinMain::setEnvironmentMap(EnvironmentMap environmentMap) noexcept
 {
-    if (sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].first == "Atmosphere")
+    if (environmentMap == EnvironmentMap::None)
+    {
+        // Load a null image
+        currentEnvironmentMap = environmentMap;
+        return Capsaicin::SetEnvironmentMap("");
+    }
+    else if (sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].first == "Atmosphere")
     {
         // The atmosphere technique overrides current environment map
-        renderSettings.setOption<bool>("atmosphere_enable", true);
+        Capsaicin::setOption<bool>("atmosphere_enable", true);
+        currentEnvironmentMap = environmentMap;
         return true;
     }
-    else if (renderSettings.hasOption<bool>("atmosphere_enable"))
+    else if (Capsaicin::hasOption<bool>("atmosphere_enable"))
     {
-        renderSettings.setOption<bool>("atmosphere_enable", false);
+        Capsaicin::setOption<bool>("atmosphere_enable", false);
     }
 
-    // Remove the old environment map
-    if (renderSettings.environment_map_)
+    error_code ec;
+    for (auto &i : sceneDirectories)
     {
-        auto handle = gfxSceneGetImageHandle(sceneData, renderSettings.environment_map_.getIndex());
-        gfxSceneDestroyImage(sceneData, handle);
+        string evFile = i;
+        evFile += sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].second.data();
+        if (std::filesystem::exists(evFile, ec))
+        {
+            currentEnvironmentMap = environmentMap;
+            return Capsaicin::SetEnvironmentMap(evFile);
+        }
     }
+    printString("Failed to find requested environment map file: "s
+                    + string(sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].second),
+        MessageLevel::Error);
+    return false;
+}
 
-    if (sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].first == "None")
-    {
-        // Don't load new map
-        renderSettings.environment_map_ = GfxConstRef<GfxImage>();
-        return true;
-    }
-
-    // Load in the new environment map
-    if (gfxSceneImport(sceneData, sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].second.data())
-        != kGfxResult_NoError)
+bool CapsaicinMain::setRenderer(std::string_view renderer) noexcept
+{
+    // Change render settings based on currently selected renderer
+    if (!Capsaicin::SetRenderer(renderer))
     {
         return false;
     }
 
-    // Update render settings
-    renderSettings.environment_map_ = gfxSceneFindObjectByAssetFile<GfxImage>(
-        sceneData, sceneEnvironmentMaps[static_cast<uint32_t>(environmentMap)].second.data());
-    return true;
-}
-
-void CapsaicinMain::setRenderer() noexcept
-{
-    // Change render settings based on currently selected renderer
-    renderSettings.debug_view_ = "None";
-
-    if (sceneData)
-    {
-        // If we are already loaded and the renderer is changed then destroy capsaicin and reload
-        reset();
-    }
-
-    setSceneRenderOptions();
-}
-
-void CapsaicinMain::setSceneRenderOptions(bool force) noexcept
-{
-    if (!force && renderSettings.hasOption<float>("tonemap_exposure"))
-    {
-        return;
-    }
     // Set render settings based on current scene
-    renderSettings.setOption("tonemap_exposure", scenes[static_cast<uint32_t>(scene)].renderExposure);
-}
+    auto const currentScenes = Capsaicin::GetCurrentScenes();
+    auto const selectedScene = std::find_if(scenes.cbegin(), scenes.cend(),
+        [&currentScenes](auto const &value) { return value.fileNames == currentScenes; });
 
-void CapsaicinMain::setPlayMode(Capsaicin::PlayMode playMode) noexcept
-{
-    if (renderSettings.play_mode_ != playMode)
+    if (selectedScene != scenes.cend())
     {
-        renderSettings.play_mode_ = playMode;
-        if (renderSettings.play_mode_ == Capsaicin::kPlayMode_FrameByFrame)
-        {
-            renderSettings.play_to_frame_index_ = Capsaicin::GetFrameIndex();
-            setAnimation(true);
-        }
-        else if (renderSettings.play_mode_ == Capsaicin::kPlayMode_None)
-        {
-            // Check if state was previously paused before it was changed to frame-by-frame
-            if (renderSettings.delta_time_ > 0.0f)
-            {
-                setAnimation(false);
-            }
-        }
+        Capsaicin::setOption("tonemap_exposure", selectedScene->renderExposure);
     }
-}
 
-void CapsaicinMain::setAnimation(bool animate) noexcept
-{
-    renderSettings.play_from_start_ = !animate;
-    if (renderSettings.play_mode_ == Capsaicin::kPlayMode_None)
-    {
-        if (animate)
-        {
-            Capsaicin::SetSequenceTime(renderSettings.delta_time_);
-            renderSettings.delta_time_ = 0.0f;
-        }
-        else
-        {
-            renderSettings.delta_time_ = (float)Capsaicin::GetSequenceTime() + FLT_EPSILON;
-        }
-    }
-    Capsaicin::SetAnimate(animate);
-}
-
-void CapsaicinMain::toggleAnimation() noexcept
-{
-    bool const paused = !getAnimation();
-    setAnimation(paused);
-}
-
-void CapsaicinMain::restartAnimation() noexcept
-{
-    // Reset animations to start
-    renderSettings.play_from_start_     = true;
-    renderSettings.delta_time_          = renderSettings.delta_time_ == 0.0f ? 0.0f : FLT_EPSILON;
-    renderSettings.play_to_frame_index_ = 1;
-    Capsaicin::SetSequenceTime(0.0);
-}
-
-bool CapsaicinMain::getAnimation() noexcept
-{
-    return Capsaicin::GetAnimate();
-}
-
-void CapsaicinMain::tickAnimation() noexcept
-{
-    if (renderSettings.play_mode_ == Capsaicin::kPlayMode_FrameByFrame)
-    {
-        renderSettings.play_from_start_ = false;
-        return;
-    }
-    bool const paused               = !getAnimation();
-    renderSettings.play_from_start_ = paused;
-}
-
-uint32_t CapsaicinMain::getCurrentAnimationFrame() noexcept
-{
-    return (uint32_t)((float)Capsaicin::GetSequenceTime() / renderSettings.frame_by_frame_delta_time_);
+    // Reset camera movement
+    cameraTranslation = vec3(0.0f);
+    cameraRotation    = vec2(0.0f);
+    return true;
 }
 
 bool CapsaicinMain::renderFrame() noexcept
@@ -706,8 +771,7 @@ bool CapsaicinMain::renderFrame() noexcept
     }
 
     // Check if window should close
-    if (gfxWindowIsCloseRequested(window)
-        || gfxWindowIsKeyReleased(window, keyboardMappings[static_cast<uint32_t>(kbMap)].exit))
+    if (gfxWindowIsCloseRequested(window) || gfxWindowIsKeyReleased(window, VK_ESCAPE))
     {
         return false;
     }
@@ -718,8 +782,9 @@ bool CapsaicinMain::renderFrame() noexcept
     if (!benchmarkMode)
     {
         // Update the camera
-        if (renderSettings.play_mode_ != Capsaicin::kPlayMode_FrameByFrame)
+        if (!Capsaicin::GetFixedFrameRate())
         {
+            auto        camera       = Capsaicin::GetSceneCamera();
             vec3 const  forward      = normalize(camera->center - camera->eye);
             vec3 const  right        = cross(forward, camera->up);
             vec3 const  up           = cross(right, forward);
@@ -727,7 +792,7 @@ bool CapsaicinMain::renderFrame() noexcept
             float const force        = cameraSpeed * 10000.0f;
 
             // Clamp frametime to prevent errors at low frame rates
-            frameTime = glm::min(frameTime, 0.05f);
+            auto frameTime = glm::min(static_cast<float>(Capsaicin::GetFrameTime()), 0.05f);
 
             // Get keyboard input
             if (!ImGui::GetIO().WantCaptureKeyboard)
@@ -759,6 +824,23 @@ bool CapsaicinMain::renderFrame() noexcept
             }
             cameraTranslation += acceleration * 0.5f * frameTime;
             cameraTranslation = glm::clamp(cameraTranslation, -cameraSpeed, cameraSpeed);
+            // Clamp tiny values to zero to improve convergence to resting state
+            auto const clampMin = glm::lessThan(glm::abs(cameraTranslation), vec3(0.0000001f));
+            if (glm::any(clampMin))
+            {
+                if (clampMin.x)
+                {
+                    cameraTranslation.x = 0.0f;
+                }
+                if (clampMin.y)
+                {
+                    cameraTranslation.y = 0.0f;
+                }
+                if (clampMin.z)
+                {
+                    cameraTranslation.z = 0.0f;
+                }
+            }
 
             // Get mouse input
             vec2        acceleration2 = cameraRotation * -45.0f;
@@ -770,18 +852,31 @@ bool CapsaicinMain::renderFrame() noexcept
             }
             cameraRotation += acceleration2 * 0.5f * frameTime;
             cameraRotation = glm::clamp(cameraRotation, -4e-2f, 4e-2f);
+            // Clamp tiny values to zero to improve convergence to resting state
+            auto const clampRotationMin = glm::lessThan(glm::abs(cameraRotation), vec2(0.00000001f));
+            if (glm::any(clampRotationMin))
+            {
+                if (clampRotationMin.x)
+                {
+                    cameraRotation.x = 0.0f;
+                }
+                if (clampRotationMin.y)
+                {
+                    cameraRotation.y = 0.0f;
+                }
+            }
             ImGui::ResetMouseDragDelta(0);
 
             if (!glm::all(glm::equal(cameraTranslation, vec3(0.0f)))
                 || !glm::all(glm::equal(cameraRotation, vec2(0.0f))))
             {
-                if (cameraIndex != 0)
+                if (Capsaicin::GetSceneCurrentCamera() != "User")
                 {
                     // Change to the user camera
-                    auto userCamera = gfxSceneGetCameraHandle(sceneData, 0);
-                    *userCamera     = *camera;
-                    cameraIndex     = 0;
-                    setCamera();
+                    auto oldCamera = camera;
+                    Capsaicin::SetSceneCamera("User");
+                    camera  = Capsaicin::GetSceneCamera();
+                    *camera = *oldCamera;
                 }
 
                 // Update translation
@@ -826,55 +921,102 @@ bool CapsaicinMain::renderFrame() noexcept
             camera->fovY -= mouseWheelH;
             camera->fovY =
                 glm::clamp(camera->fovY, 10.0f * (float)M_PI / 180.0f, 140.0f * (float)M_PI / 180.0f);
-        }
 
-        // Hot-reload the shaders if requested
-        if (gfxWindowIsKeyReleased(window, VK_F5))
-        {
-            gfxKernelReloadAll(contextGFX);
-        }
+            // Handle playback animation keys
+            if (Capsaicin::HasAnimation())
+            {
+                if (gfxWindowIsKeyReleased(window, VK_UP))
+                {
+                    if (!Capsaicin::GetPaused())
+                    {
+                        Capsaicin::IncreasePlaybackSpeed();
+                    }
+                }
+                if (gfxWindowIsKeyReleased(window, VK_DOWN))
+                {
+                    if (!Capsaicin::GetPaused())
+                    {
+                        Capsaicin::DecreasePlaybackSpeed();
+                    }
+                }
+                if (gfxWindowIsKeyReleased(window, VK_LEFT))
+                {
+                    Capsaicin::StepPlaybackBackward(1);
+                }
+                if (gfxWindowIsKeyReleased(window, VK_RIGHT))
+                {
+                    Capsaicin::StepPlaybackForward(1);
+                }
+            }
 
-        // Save image to disk if requested
-        if (gfxWindowIsKeyReleased(window, VK_F6))
-        {
-            saveFrame();
-        }
+            if (Capsaicin::HasAnimation() || Capsaicin::GetRenderPaused())
+            {
+                // Pause/Resume animations if requested
+                if (gfxWindowIsKeyReleased(window, VK_SPACE))
+                {
+                    if (Capsaicin::GetPaused())
+                    {
+                        if (!Capsaicin::GetRenderPaused())
+                        {
+                            Capsaicin::ResetPlaybackSpeed();
+                            Capsaicin::SetPaused(false);
+                        }
+                        else
+                        {
+                            // Render 1 more frame
+                            Capsaicin::SetRenderPaused(false);
+                            reDisableRender = true;
+                        }
+                    }
+                    else
+                    {
+                        Capsaicin::SetPaused(true);
+                    }
+                }
+            }
 
-        // Pause/Resume animations if requested
-        if (gfxWindowIsKeyReleased(window, keyboardMappings[static_cast<uint32_t>(kbMap)].pause))
-        {
-            toggleAnimation();
+            // Hot-reload the shaders if requested
+            if (gfxWindowIsKeyReleased(window, VK_F5))
+            {
+                Capsaicin::ReloadShaders();
+            }
+
+            // Save image to disk if requested
+            if (gfxWindowIsKeyReleased(window, VK_F6))
+            {
+                saveFrame();
+            }
         }
     }
 
     // Render the scene
-    Capsaicin::Render(sceneData, renderSettings);
+    Capsaicin::Render();
 
     if (!benchmarkMode)
     {
         // Re-enable Tonemap after save to disk
         if (reenableToneMap)
         {
-            renderSettings.setOption("tonemap_enable", true);
+            Capsaicin::setOption("tonemap_enable", true);
             reenableToneMap = false;
         }
     }
 
-    // Progress any animation state
-    tickAnimation();
+    if (reDisableRender)
+    {
+        Capsaicin::SetRenderPaused(true);
+        reDisableRender = false;
+    }
 
     // Render the UI
     renderGUI();
 
     // Complete the frame
+#if _DEBUG || defined(SHADER_DEBUG)
     gfxFrame(contextGFX);
-
-    // Update frame time
-    auto wallTime =
-        chrono::duration_cast<chrono::microseconds>(chrono::high_resolution_clock::now().time_since_epoch());
-    currentTime  = wallTime.count() / 1000000.0;
-    frameTime    = static_cast<float>(currentTime - previousTime);
-    previousTime = currentTime;
+#else
+    gfxFrame(contextGFX, false);
+#endif
 
     return true;
 }
@@ -886,13 +1028,10 @@ bool CapsaicinMain::renderGUI() noexcept
     ImGui::Begin(
         programName.data(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     {
-        ImGui::Text("Selected device :  %s", contextGFX.getName());
-        ImGui::Separator();
-
         if (!benchmarkMode)
         {
             // Select which scene to display
-            int32_t selectedScene = static_cast<uint32_t>(scene);
+            int32_t selectedScene = static_cast<int32_t>(currentScene);
             string  sceneList;
             for (auto &i : scenes)
             {
@@ -901,48 +1040,53 @@ bool CapsaicinMain::renderGUI() noexcept
             }
             if (ImGui::Combo("Scene", &selectedScene, sceneList.c_str(), static_cast<int32_t>(scenes.size())))
             {
-                if (static_cast<uint32_t>(scene) != selectedScene)
+                if (currentScene != static_cast<Scene>(selectedScene))
                 {
                     // Change the selected scene
-                    scene       = static_cast<Scene>(selectedScene);
-                    updateScene = true;
+                    if (!loadScene(static_cast<Scene>(selectedScene)))
+                    {
+                        ImGui::End();
+                        return false;
+                    }
+                    // Reset environment map
+                    auto const environmentMap =
+                        scenes[static_cast<uint32_t>(selectedScene)].useEnvironmentMap
+                            ? (currentEnvironmentMap != EnvironmentMap::None ? currentEnvironmentMap
+                                                                             : defaultEnvironmentMap)
+                            : EnvironmentMap::None;
+                    if (!setEnvironmentMap(environmentMap))
+                    {
+                        ImGui::End();
+                        return false;
+                    }
                 }
             }
 
             // Optionally select which environment map is used
-            if (scenes[static_cast<uint32_t>(scene)].useEnvironmentMap)
+            if (scenes[static_cast<uint32_t>(selectedScene)].useEnvironmentMap)
             {
-                int32_t selectedEM = static_cast<uint32_t>(environmentMap);
                 string  emList;
+                int32_t selectedEM = static_cast<int32_t>(currentEnvironmentMap);
                 for (auto &i : sceneEnvironmentMaps)
                 {
-                    if (i.first == "Atmosphere" && !renderSettings.hasOption<bool>("atmosphere_enable"))
-                        continue;
+                    if (i.first == "Atmosphere" && !Capsaicin::hasOption<bool>("atmosphere_enable")) continue;
                     emList += i.first;
                     emList += '\0';
                 }
                 if (ImGui::Combo(
                         "Environment Map", &selectedEM, emList.c_str(), static_cast<int32_t>(emList.size())))
                 {
-                    if (static_cast<uint32_t>(environmentMap) != selectedEM)
+                    if (currentEnvironmentMap != static_cast<EnvironmentMap>(selectedEM))
                     {
                         // Change the selected environment map
-                        environmentMap       = static_cast<EnvironmentMap>(selectedEM);
-                        updateEnvironmentMap = true;
+                        if (!setEnvironmentMap(static_cast<EnvironmentMap>(selectedEM)))
+                        {
+                            ImGui::End();
+                            return false;
+                        }
                     }
                 }
             }
-
-            ImGui::Text("Triangle Count            :  %u", triangleCount);
-            const uint32 deltaLightCount = Capsaicin::GetDeltaLightCount();
-            const uint32 areaLightCount  = Capsaicin::GetAreaLightCount();
-            const uint32 envLightCount   = Capsaicin::GetEnvironmentLightCount();
-            ImGui::Text("Light Count               :  %u", areaLightCount + deltaLightCount + envLightCount);
-            ImGui::Text("  Area Light Count        :  %u", areaLightCount);
-            ImGui::Text("  Delta Light Count       :  %u", deltaLightCount);
-            ImGui::Text("  Environment Light Count :  %u", envLightCount);
-            ImGui::Text("Render Resolution         :  %ux%u", gfxGetBackBufferWidth(contextGFX),
-                gfxGetBackBufferHeight(contextGFX));
 
             // Call the class specific GUI function
             renderGUIDetails();
@@ -950,7 +1094,7 @@ bool CapsaicinMain::renderGUI() noexcept
         else
         {
             // Display profiling options
-            renderProfiling();
+            Capsaicin::RenderGUI(true);
         }
     }
     ImGui::End();
@@ -964,29 +1108,19 @@ bool CapsaicinMain::renderGUI() noexcept
     return true;
 }
 
-bool CapsaicinMain::renderCameraDetails() noexcept
+void CapsaicinMain::renderCameraDetails() noexcept
 {
     if (ImGui::CollapsingHeader("Camera settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
         // Select which preset camera to use
-        int32_t selectedCamera = cameraIndex;
-        string  cameraList;
-        for (uint32_t i = 0; i < gfxSceneGetCameraCount(sceneData); ++i)
+        string     cameraList;
+        auto const cameras        = Capsaicin::GetSceneCameras();
+        int32_t    selectedCamera = static_cast<int32_t>(
+            std::find(cameras.begin(), cameras.end(), Capsaicin::GetSceneCurrentCamera()) - cameras.begin());
+        auto const cameraIndex = selectedCamera;
+        for (auto const &i : cameras)
         {
-            if (i > 0)
-            {
-                auto        cameraHandle = gfxSceneGetCameraHandle(sceneData, i);
-                string_view cameraName   = gfxSceneGetCameraMetadata(sceneData, cameraHandle).getObjectName();
-                if (cameraName.find("Camera"sv) == 0 && cameraName.length() > 6)
-                {
-                    cameraName = cameraName.substr(6);
-                }
-                cameraList += cameraName;
-            }
-            else
-            {
-                cameraList += "User"sv;
-            }
+            cameraList += i;
             cameraList += '\0';
         }
         if (ImGui::Combo(
@@ -995,14 +1129,14 @@ bool CapsaicinMain::renderCameraDetails() noexcept
             if (cameraIndex != selectedCamera)
             {
                 // Change the selected camera
-                cameraIndex  = selectedCamera;
-                updateCamera = true;
+                setCamera(cameras[selectedCamera]);
             }
         }
 
-        float   fovf      = glm::degrees(camera->fovY);
-        int32_t fov       = static_cast<int32_t>(fovf);
-        float   remainder = fovf - static_cast<float>(fov);
+        auto const camera    = Capsaicin::GetSceneCamera();
+        float      fovf      = glm::degrees(camera->fovY);
+        int32_t    fov       = static_cast<int32_t>(fovf);
+        float      remainder = fovf - static_cast<float>(fov);
         ImGui::DragInt("FOV", &fov, 1, 10, 140);
         camera->fovY = glm::radians(static_cast<float>(fov) + remainder);
         ImGui::DragFloat("Speed", &cameraSpeed, 0.01f);
@@ -1054,134 +1188,205 @@ bool CapsaicinMain::renderCameraDetails() noexcept
             ImGui::TreePop();
         }
     }
-    return true;
 }
 
-void CapsaicinMain::renderGUIDetails() noexcept
+bool CapsaicinMain::renderGUIDetails() noexcept
 {
     // Display camera options
     renderCameraDetails();
+
+    // Display animation options
+    if (ImGui::CollapsingHeader("Animation Settings", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (!Capsaicin::HasAnimation())
+        {
+            ImGui::BeginDisabled();
+        }
+        constexpr char const *playModes[2] = {"Real-time", "Fixed Frame Rate"};
+
+        int32_t playMode = static_cast<int32_t>(Capsaicin::GetFixedFrameRate());
+        if (ImGui::Combo("Play mode", &playMode, playModes, 2))
+        {
+            Capsaicin::SetFixedFrameRate(playMode > 0);
+        }
+        if (!Capsaicin::HasAnimation())
+        {
+            ImGui::EndDisabled();
+        }
+        ImVec2     buttonHeight(0.0f, 30.0f);
+        char const restartGlyph[] = {static_cast<char>(0xF0), static_cast<char>(0x9F),
+            static_cast<char>(0x94), static_cast<char>(0x83),
+            static_cast<char>(0x0)}; // Workaround compiler not handling u8"\u1F503" properly
+        if (ImGui::Button(restartGlyph, buttonHeight)) // Restart
+        {
+            Capsaicin::RestartPlayback();
+        }
+        if (!Capsaicin::HasAnimation())
+        {
+            ImGui::BeginDisabled();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23EE"), buttonHeight)) // Step backward
+        {
+            Capsaicin::StepPlaybackBackward(30);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23EA"), buttonHeight)) // Rewind
+        {
+            // If paused then just step back 1 frame, otherwise rewind
+            if (Capsaicin::GetPaused())
+            {
+                Capsaicin::StepPlaybackBackward(1);
+            }
+            else if (!Capsaicin::GetPlayRewind())
+            {
+                if (Capsaicin::GetPlaybackSpeed() > 1.5)
+                {
+                    // If currently fast forwarding then slow down speed
+                    Capsaicin::DecreasePlaybackSpeed();
+                }
+                else
+                {
+                    Capsaicin::ResetPlaybackSpeed();
+                    Capsaicin::SetPlayRewind(true);
+                }
+            }
+            else
+            {
+                // If already rewinding then increase rewind speed
+                Capsaicin::IncreasePlaybackSpeed();
+            }
+        }
+        ImGui::SameLine();
+        if (!Capsaicin::HasAnimation() && Capsaicin::GetRenderPaused())
+        {
+            ImGui::EndDisabled();
+        }
+        if (Capsaicin::GetPaused())
+        {
+            // Display play button
+            if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23F5"), buttonHeight))
+            {
+                if (!Capsaicin::GetRenderPaused())
+                {
+                    Capsaicin::ResetPlaybackSpeed();
+                    Capsaicin::SetPaused(false);
+                }
+                else
+                {
+                    // Render 1 more frame
+                    Capsaicin::SetRenderPaused(false);
+                    reDisableRender = true;
+                }
+            }
+        }
+        else
+        {
+            // Display pause button
+            if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23F8"), buttonHeight))
+            {
+                Capsaicin::SetPaused(true);
+            }
+        }
+        if (!Capsaicin::HasAnimation() && (Capsaicin::GetRenderPaused() || reDisableRender))
+        {
+            ImGui::BeginDisabled();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23E9"), buttonHeight)) // Fast forward
+        {
+            // If paused then just step forward 1 frame, otherwise fast-forward
+            if (Capsaicin::GetPaused())
+            {
+                Capsaicin::StepPlaybackForward(1);
+            }
+            else if (Capsaicin::GetPlayRewind())
+            {
+                if (Capsaicin::GetPlaybackSpeed() > 1.5)
+                {
+                    // If currently fast rewinding then slow down speed
+                    Capsaicin::DecreasePlaybackSpeed();
+                }
+                else
+                {
+                    Capsaicin::ResetPlaybackSpeed();
+                    Capsaicin::SetPlayRewind(false);
+                }
+            }
+            else
+            {
+                // If already fast-forwarding then increase speed
+                Capsaicin::IncreasePlaybackSpeed();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23ED"), buttonHeight)) // Step forward
+        {
+            Capsaicin::StepPlaybackForward(30);
+        }
+        ImGui::SameLine();
+        if (!Capsaicin::HasAnimation())
+        {
+            ImGui::EndDisabled();
+        }
+        if (!Capsaicin::GetRenderPaused())
+        {
+            if (ImGui::Button(reinterpret_cast<char const *>(u8"\u23F3"), buttonHeight)) // Pause renderer
+            {
+                // Ensure animation is also paused
+                Capsaicin::SetPaused(true);
+                Capsaicin::SetRenderPaused(true);
+                reDisableRender = false;
+            }
+        }
+        else
+        {
+            if (ImGui::Button(reinterpret_cast<char const *>(u8"\u231B"), buttonHeight)) // Unpause renderer
+            {
+                Capsaicin::SetRenderPaused(false);
+                reDisableRender = false;
+            }
+        }
+    }
 
     if (ImGui::CollapsingHeader("Render settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
         // Select which renderer to use
         string  rendererString;
-        auto    rendererList = Capsaicin::GetRenderers();
-        int32_t selectedRenderer =
-            static_cast<int32_t>(find(rendererList.cbegin(), rendererList.cend(), renderSettings.renderer_)
-                                 - rendererList.cbegin());
+        auto    rendererList     = Capsaicin::GetRenderers();
+        int32_t selectedRenderer = static_cast<int32_t>(
+            find(rendererList.cbegin(), rendererList.cend(), Capsaicin::GetCurrentRenderer())
+            - rendererList.cbegin());
         int32_t currentRenderer = selectedRenderer;
         for (auto &i : rendererList)
         {
             rendererString += i;
             rendererString += '\0';
         }
-        auto renderer = renderSettings.renderer_;
         if (ImGui::Combo("Renderer", &selectedRenderer, rendererString.c_str(), 8))
         {
             if (currentRenderer != selectedRenderer)
             {
                 // Change the selected renderer
-                renderSettings.renderer_ = rendererList[selectedRenderer];
-                updateRenderer           = true;
+                if (!setRenderer(rendererList[selectedRenderer]))
+                {
+                    return false;
+                }
             }
         }
-        // Light sampling settings
-        if (renderSettings.hasOption<bool>("delta_light_enable") &&
-            ImGui::CollapsingHeader("Light Sampler Settings", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::Checkbox("Enable Delta Lights", &renderSettings.getOption<bool>("delta_light_enable"));
-            ImGui::Checkbox("Enable Area Lights", &renderSettings.getOption<bool>("area_light_enable"));
-            ImGui::Checkbox(
-                "Enable Environment Lights", &renderSettings.getOption<bool>("environment_light_enable"));
-        }
-        // Display renderer specific options
-        if (ImGui::CollapsingHeader("Renderer Settings", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            if (renderSettings.hasOption<bool>("tonemap_enable"))
-            {
-                // Tone mapping settings
-                bool &enabled = renderSettings.getOption<bool>("tonemap_enable");
-                if (!enabled) ImGui::BeginDisabled(true);
-                ImGui::DragFloat("Exposure", &renderSettings.getOption<float>("tonemap_exposure"), 5e-3f);
-                if (!enabled) ImGui::EndDisabled();
-                ImGui::Checkbox("Enable Tone Mapping", &enabled);
-            }
-            if (renderer == "Path Tracer")
-            {
-                ImGui::DragInt("Samples Per Pixel",
-                    (int32_t *)&renderSettings.getOption<uint32_t>("reference_pt_sample_count"), 1, 0, 30);
-                auto &bounces = renderSettings.getOption<uint32_t>("reference_pt_bounce_count");
-                ImGui::DragInt("Bounces", (int32_t *)&bounces, 1, 0, 30);
-                auto &minBounces = renderSettings.getOption<uint32_t>("reference_pt_min_rr_bounces");
-                ImGui::DragInt("Min Bounces", (int32_t *)&minBounces, 1, 0, bounces);
-                minBounces = glm::min(minBounces, bounces);
-                ImGui::Checkbox("Disable Albedo Textures",
-                    &renderSettings.getOption<bool>("reference_pt_disable_albedo_materials"));
-                ImGui::Checkbox("Disable Direct Lighting",
-                    &renderSettings.getOption<bool>("reference_pt_disable_direct_lighting"));
-                ImGui::Checkbox("Disable Specular Lighting",
-                    &renderSettings.getOption<bool>("reference_pt_disable_specular_lighting"));
-            }
-            else if (renderer == "GI-1.0")
-            {
-                ImGui::Checkbox("Use TAA", &renderSettings.getOption<bool>("taa_enable"));
-                ImGui::Checkbox("Use Resampling", &renderSettings.getOption<bool>("gi10_use_resampling"));
-                ImGui::Checkbox(
-                    "Use Direct Lighting", &renderSettings.getOption<bool>("gi10_use_direct_lighting"));
-                ImGui::Checkbox("Disable Albedo Textures",
-                    &renderSettings.getOption<bool>("gi10_disable_albedo_textures"));
-            }
-        }
+        Capsaicin::RenderGUI(false);
         ImGui::Separator();
     }
-
-    // Display animation options
-    if (gfxSceneGetAnimationCount(sceneData) > 0)
-    {
-        if (ImGui::CollapsingHeader("Animation Settings", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            int32_t playMode = (int32_t)renderSettings.play_mode_;
-            if (ImGui::Combo(
-                    "Play mode", &playMode, Capsaicin::g_play_modes, (int32_t)Capsaicin::kPlayMode_Count))
-            {
-                setPlayMode((Capsaicin::PlayMode)playMode);
-            }
-            else if (ImGui::Button("Restart"))
-            {
-                restartAnimation();
-            }
-            else if (renderSettings.play_mode_ == Capsaicin::kPlayMode_None)
-            {
-                string_view buttonLabel = getAnimation() ? "Pause"sv : "Play"sv;
-                if (ImGui::Button(buttonLabel.data()))
-                {
-                    toggleAnimation();
-                }
-            }
-            else if (renderSettings.play_mode_ == Capsaicin::kPlayMode_FrameByFrame)
-            {
-                uint32_t playToFrame    = getCurrentAnimationFrame();
-                string   playFrameLabel = "Play Next Frame ("s + to_string(playToFrame) + ')';
-                if (ImGui::Button(playFrameLabel.data()))
-                {
-                    renderSettings.play_to_frame_index_ = Capsaicin::GetFrameIndex() + 1;
-                }
-            }
-        }
-    }
-
-    // Display profiling options
-    renderProfiling();
 
     // Display debugging options
     if (ImGui::CollapsingHeader("Debugging", ImGuiTreeNodeFlags_DefaultOpen))
     {
         // Select which debug view to use
         string  debugString;
-        auto    debugList     = Capsaicin::GetDebugViews();
-        int32_t selectedDebug = static_cast<int32_t>(
-            find(debugList.cbegin(), debugList.cend(), renderSettings.debug_view_) - debugList.cbegin());
+        auto    debugList = Capsaicin::GetDebugViews();
+        int32_t selectedDebug =
+            static_cast<int32_t>(find(debugList.cbegin(), debugList.cend(), Capsaicin::GetCurrentDebugView())
+                                 - debugList.cbegin());
         selectedDebug        = std::max(selectedDebug, 0); // Reset to 0 if unfound
         int32_t currentDebug = selectedDebug;
         for (auto &i : debugList)
@@ -1194,140 +1399,27 @@ void CapsaicinMain::renderGUIDetails() noexcept
             if (currentDebug != selectedDebug)
             {
                 // Change the selected view
-                renderSettings.debug_view_ = debugList[selectedDebug];
+                Capsaicin::SetDebugView(debugList[selectedDebug]);
             }
         }
         if (ImGui::Button("Reload Shaders (F5)"))
         {
-            gfxKernelReloadAll(contextGFX);
+            Capsaicin::ReloadShaders();
         }
         if (ImGui::Button("Dump Frame (F6)"))
         {
             saveFrame();
         }
-        renderOptions();
-    }
-}
-
-void CapsaicinMain::renderProfiling() noexcept
-{
-    if (ImGui::CollapsingHeader("Profiling", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        auto [totalFrameTime, timestamps] = Capsaicin::GetProfiling();
-
-        bool   children      = false;
-        size_t maxStringSize = 0;
-        for (auto &i : timestamps)
-        {
-            bool                     hasChildren = i.children_.size() > 1;
-            const ImGuiTreeNodeFlags flags =
-                (hasChildren ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_Leaf);
-
-            children = children || hasChildren;
-            if (ImGui::TreeNodeEx(i.name_.data(), flags, "%-20s: %.3f ms", i.children_[0].name_.data(),
-                    i.children_[0].time_))
-            {
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.8f, 0.4f, 0.0f, 1.0f));
-                maxStringSize = std::max(maxStringSize, i.children_[0].name_.length());
-                for (uint32_t j = 1; j < i.children_.size(); ++j)
-                {
-                    const ImGuiTreeNodeFlags selectedFlag =
-                        (selectedProfile.first == i.name_ && selectedProfile.second == i.children_[j].name_
-                                ? ImGuiTreeNodeFlags_Selected
-                                : ImGuiTreeNodeFlags_None);
-                    ImGui::TreeNodeEx(std::to_string(j).c_str(),
-                        ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | selectedFlag,
-                        "%-17s:  %.3f ms", i.children_[j].name_.data(), i.children_[j].time_);
-
-                    maxStringSize = std::max(maxStringSize, i.children_[j].name_.length());
-                    if (ImGui::IsItemClicked())
-                    {
-                        selectedProfile =
-                            std::make_pair(!selectedFlag ? i.name_ : nullptr, i.children_[j].name_);
-                    }
-                }
-
-                ImGui::PopStyleColor();
-                ImGui::TreePop();
-            }
-        }
-
-        ImGui::Separator();
-
-        frameGraph.addValue(totalFrameTime);
-        const std::string graphName = std::format("{:.2f}", totalFrameTime) + " ms ("
-                                    + std::format("{:.2f}", 1000.0f / totalFrameTime) + " fps)";
-
-        ImGui::PushID("Total frame time");
-        std::string text            = "Total frame time";
-        size_t      additionalSpace = maxStringSize > text.size() ? maxStringSize - text.size() : 0;
-        if (children)
-        {
-            text.insert(0, "   ");
-        }
-        for (size_t i = 0; i < additionalSpace + 1; ++i)
-        {
-            text.append(" ");
-        }
-        text.append(":");
-        ImGui::Text(text.data());
         ImGui::SameLine();
-        ImGui::PlotLines("", CapsaicinMain::Graph::GetValueAtIndex, &frameGraph, frameGraph.getValueCount(),
-            0, graphName.c_str(), 0.0f, FLT_MAX, ImVec2(150, 20));
-        ImGui::PopID();
-
-        ImGui::PushID("Frame");
-        text            = "Frame";
-        additionalSpace = maxStringSize > text.size() ? maxStringSize - text.size() : 0;
-        if (children)
-        {
-            text.insert(0, "   ");
-        }
-        for (size_t i = 0; i < additionalSpace + 1; ++i)
-        {
-            text.append(" ");
-        }
-        text.append(":");
-        ImGui::Text(text.data());
-        ImGui::SameLine();
-        ImGui::Text(to_string(Capsaicin::GetFrameIndex()).c_str());
-        ImGui::PopID();
+        ImGui::Checkbox("Save as JPEG", &saveAsJPEG);
     }
-}
-
-void CapsaicinMain::renderOptions() noexcept
-{
-    if (ImGui::CollapsingHeader("Render Options", ImGuiTreeNodeFlags_OpenOnArrow))
-    {
-        for (auto &i : renderSettings.options_)
-        {
-            if (std::holds_alternative<bool>(i.second))
-            {
-                ImGui::Checkbox(i.first.data(), std::get_if<bool>(&(i.second)));
-            }
-            else if (std::holds_alternative<uint32_t>(i.second))
-            {
-                uint32_t *option = std::get_if<uint32_t>(&(i.second));
-                ImGui::DragInt(i.first.data(), reinterpret_cast<int32_t *>(option), 1, 0);
-            }
-            else if (std::holds_alternative<int32_t>(i.second))
-            {
-                ImGui::DragInt(i.first.data(), std::get_if<int32_t>(&(i.second)), 1);
-            }
-            else if (std::holds_alternative<float>(i.second))
-            {
-                ImGui::DragFloat(i.first.data(), std::get_if<float>(&(i.second)), 5e-3f);
-            }
-        }
-    }
+    return true;
 }
 
 void CapsaicinMain::saveFrame() noexcept
 {
-    // Save the current frame buffer to disk
-    uint32_t frameIndex = Capsaicin::GetFrameIndex();
-    string   savePath   = "./dump/"s;
     // Ensure output directory exists
+    std::string savePath = "./dump/"s;
     {
         std::filesystem::path outPath = savePath;
         std::error_code       ec;
@@ -1336,92 +1428,73 @@ void CapsaicinMain::saveFrame() noexcept
             create_directory(outPath, ec);
         }
     }
-    savePath += scenes[static_cast<uint32_t>(scene)].name;
-    savePath += "_C";
-    if (cameraIndex > 0)
+    savePath = getSaveName();
+    if (!benchmarkModeSuffix.empty())
     {
-        auto        cameraHandle = gfxSceneGetCameraHandle(sceneData, cameraIndex);
-        string_view cameraName   = gfxSceneGetCameraMetadata(sceneData, cameraHandle).getObjectName();
-        if (cameraName.find("Camera"sv) == 0 && cameraName.length() > 6)
-        {
-            cameraName = cameraName.substr(6);
-        }
-        savePath += cameraName;
+        savePath += '_';
+        savePath += benchmarkModeSuffix;
+    }
+    savePath += '_';
+    uint32_t frameIndex = Capsaicin::GetFrameIndex() + 1; //+1 to correct for 0 indexed
+    savePath += to_string(frameIndex);
+    savePath += '_';
+    savePath += to_string(Capsaicin::GetAverageFrameTime());
+    if (saveAsJPEG)
+    {
+        savePath += ".jpeg"sv;
     }
     else
     {
-        savePath += "User"sv;
+        savePath += ".exr"sv;
     }
-    savePath += "_R"sv;
-    savePath += renderSettings.renderer_;
-    savePath += "_F"sv;
-    savePath += to_string(frameIndex);
-    savePath += "_T"sv;
-    double frameTime = frameGraph.getAverageValue();
-    savePath += to_string(frameTime);
-    // savePath += "AdditionalDescription"sv;
-    savePath += ".exr"sv;
-    savePath.erase(std::remove_if(savePath.begin(), savePath.end(),
-                       [](unsigned char const c) { return std::isspace(c); }),
-        savePath.end());
+    // Save the current frame buffer to disk
     Capsaicin::DumpAOVBuffer(savePath.c_str(), "Color");
 
     // Disable performing tone mapping as we output in HDR
-    if (renderSettings.hasOption<bool>("tonemap_enable"))
+    if (!saveAsJPEG && Capsaicin::hasOption<bool>("tonemap_enable"))
     {
-        reenableToneMap = renderSettings.getOption<bool>("tonemap_enable");
-        renderSettings.setOption("tonemap_enable", false);
+        reenableToneMap = Capsaicin::getOption<bool>("tonemap_enable");
+        Capsaicin::setOption("tonemap_enable", false);
     }
 }
 
-uint32_t CapsaicinMain::Graph::getValueCount() const noexcept
+std::string CapsaicinMain::getSaveName() const noexcept
 {
-    return static_cast<uint32_t>(values.size());
-}
+    std::string savePath = "./dump/"s;
 
-void CapsaicinMain::Graph::addValue(float value) noexcept
-{
-    values[current] = value;
-    current         = (current + 1) % values.size();
-}
-
-float CapsaicinMain::Graph::getLastAddedValue() const noexcept
-{
-    if (current == 0) return getValueAtIndex(static_cast<uint32_t>(values.size() - 1));
-    return getValueAtIndex(current - 1);
-}
-
-float CapsaicinMain::Graph::getValueAtIndex(uint32_t index) const noexcept
-{
-    return values[index];
-}
-
-float CapsaicinMain::Graph::getAverageValue() noexcept
-{
-    double   runningCount = 0.0;
-    uint32_t validFrames  = 0;
-    for (uint32_t i = 0; i < getValueCount(); ++i)
+    auto currentScenes = Capsaicin::GetCurrentScenes();
+    GFX_ASSERT(!currentScenes.empty());
+    auto currentSceneName = currentScenes[0];
+    currentSceneName.erase(currentSceneName.length() - 5); // Remove the '.gltf' extension
+    auto const sceneFolders = currentSceneName.find_last_of("/\\");
+    if (sceneFolders != std::string::npos)
     {
-        runningCount += (double)getValueAtIndex(i);
-        if (getValueAtIndex(i) != 0.0f)
+        currentSceneName.erase(0, sceneFolders + 1);
+    }
+    auto currentEM = Capsaicin::GetCurrentEnvironmentMap();
+    if (!currentEM.empty())
+    {
+        currentEM.erase(currentEM.length() - 4); // Remove the '.hdr' extension
+        auto const emFolders = currentEM.find_last_of("/\\");
+        if (emFolders != std::string::npos)
         {
-            ++validFrames;
+            currentEM.erase(0, emFolders + 1);
         }
     }
-    return static_cast<float>(runningCount / (double)validFrames);
-}
+    else
+    {
+        currentEM = "None";
+    }
 
-void CapsaicinMain::Graph::reset() noexcept
-{
-    current = 0;
-    values.fill(0.0f);
-}
-
-float CapsaicinMain::Graph::GetValueAtIndex(void *object, int32_t index) noexcept
-{
-    Graph const  &graph      = *static_cast<Graph const *>(object);
-    const int32_t offset     = (int32_t)(graph.values.size()) - index;
-    const int32_t newIndex   = (int32_t)(graph.current) - offset;
-    const int32_t fixedIndex = (newIndex < 0 ? (int32_t)(graph.values.size()) + newIndex : newIndex);
-    return graph.values[fixedIndex];
+    savePath += currentSceneName;
+    savePath += '_';
+    savePath += currentEM;
+    savePath += '_';
+    savePath += Capsaicin::GetSceneCurrentCamera();
+    savePath += '_';
+    savePath += Capsaicin::GetCurrentRenderer();
+    savePath.erase(std::remove_if(savePath.begin(), savePath.end(),
+                       [](unsigned char const c) { return std::isspace(c); }),
+        savePath.end());
+    return savePath;
 }

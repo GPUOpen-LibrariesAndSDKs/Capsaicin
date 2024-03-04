@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -47,11 +47,11 @@ public:
     };
 
     /**
-     * Convert render settings to internal options format.
-     * @param settings Current render settings.
+     * Convert render options to internal options format.
+     * @param options Current render options.
      * @returns The options converted.
      */
-    static RenderOptions convertOptions(RenderSettings const &settings) noexcept;
+    static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
     /**
      * Gets a list of any shared components used by the current render technique.
@@ -85,6 +85,11 @@ public:
      * @param [in,out] capsaicin The current capsaicin context.
      */
     void render(CapsaicinInternal &capsaicin) noexcept override;
+
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    void terminate() noexcept override;
 
 protected:
     void initializeStaticResources(CapsaicinInternal const &capsaicin);

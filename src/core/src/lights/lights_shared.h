@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -104,7 +104,7 @@ inline Light MakeAreaLight(float3 radiance, float3 vertex1, float3 vertex2, floa
 {
     // Create the new light
     Light light;
-    light.radiance = float4(radiance, glm::uintBitsToFloat(-1));
+    light.radiance = float4(radiance, glm::uintBitsToFloat(UINT_MAX));
     light.v1       = float4(vertex1, 0.0f);
     light.v2       = float4(vertex2, 0.0f);
     light.v3       = float4(vertex3, 0.0f);
@@ -145,9 +145,9 @@ inline Light MakeAreaLight(float3 radiance, float3 vertex1, float3 vertex2, floa
 inline Light MakePointLight(float3 intensity, float3 position, float range)
 {
     Light light;
-    light.radiance = float4(intensity, glm::uintBitsToFloat(-1));
+    light.radiance = float4(intensity, glm::uintBitsToFloat(UINT_MAX));
     light.v1       = float4(position, range);
-    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(kLight_Point));
+    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Point)));
     return light;
 }
 
@@ -171,11 +171,11 @@ inline Light MakeSpotLight(float3 intensity, float3 position, float range, float
     float lightAngleOffset  = cosOutter * lightAngleScale;
     float tanAngleSqPlusOne = 1.0f + (tanAngle * tanAngle);
     Light light;
-    light.radiance = float4(intensity, glm::uintBitsToFloat(-1));
+    light.radiance = float4(intensity, glm::uintBitsToFloat(UINT_MAX));
     light.v1       = float4(position, range);
     light.v2       = float4(normalize(direction), sinAngle);
-    light.v3 =
-        float4(lightAngleScale, lightAngleOffset, tanAngleSqPlusOne, glm::uintBitsToFloat(kLight_Spot));
+    light.v3       = float4(lightAngleScale, lightAngleOffset, tanAngleSqPlusOne,
+              glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Spot)));
     return light;
 }
 
@@ -189,9 +189,9 @@ inline Light MakeSpotLight(float3 intensity, float3 position, float range, float
 inline Light MakeDirectionalLight(float3 radiance, float3 direction, float range)
 {
     Light light;
-    light.radiance = float4(radiance, glm::uintBitsToFloat(-1));
+    light.radiance = float4(radiance, glm::uintBitsToFloat(UINT_MAX));
     light.v2       = float4(direction, range);
-    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(kLight_Direction));
+    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Direction)));
     return light;
 }
 
@@ -205,8 +205,8 @@ inline Light MakeEnvironmentLight(uint width, uint height)
 {
     Light light;
     uint  lod      = glm::findMSB(glm::max(width, height));
-    light.radiance = float4(float3(glm::uintBitsToFloat(lod), 0.0f, 0.0f), glm::uintBitsToFloat(-1));
-    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(kLight_Environment));
+    light.radiance = float4(float3(glm::uintBitsToFloat(lod), 0.0f, 0.0f), glm::uintBitsToFloat(UINT_MAX));
+    light.v3 = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Environment)));
     return light;
 }
 #endif

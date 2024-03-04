@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,11 +22,6 @@ THE SOFTWARE.
 
 #ifndef MATERIAL_EVALUATION_HLSL
 #define MATERIAL_EVALUATION_HLSL
-/*
-// Requires the following data to be defined in any shader that uses this file
-Texture2D g_TextureMaps[] : register(space99);
-SamplerState g_LinearSampler;
-*/
 
 #include "materials.hlsl"
 #include "../math/math_constants.hlsl"
@@ -34,31 +29,36 @@ SamplerState g_LinearSampler;
 /**
  * Calculates schlick fresnel term.
  * @param F0    The fresnel reflectance an grazing angle.
- * @param angle The angle between view and half-vector.
+ * @param dotHV The dot product of the half-vector and view direction (range [-1, 1]).
  * @return The calculated fresnel term.
  */
-float3 fresnel(float3 F0, float angle)
+float3 fresnel(float3 F0, float dotHV)
 {
+    // The half-vector may be incorrectly flipped or invisible to the view direction in some cases, and thus
+    // dotHV may be negative. For this case, we use abs(dotHV) to correct flipping and avoid NaN.
     float3 F90 = 1.0f.xxx;
-    return F0 + (F90 - F0) * pow(1.0f - angle, 5.0f);
+    return F0 + (F90 - F0) * pow(1.0f - saturate(abs(dotHV)), 5.0f);
 }
 
 /**
  * Calculates the amount to modify the diffuse component of a combined BRDF.
  * @param f     Pre-calculated fresnel value.
- * @param dotHV The dot product of the half-vector and view direction.
+ * @param dotHV The dot product of the half-vector and view direction (range [-1, 1]).
  * @return The amount to modify diffuse component by.
  */
 float3 diffuseCompensationTerm(float3 f, float dotHV)
 {
     // PBR Diffuse Lighting for GGX + Smith Microsurfaces - Hammon 2017
-    return (1.0f.xxx - f) * 1.05 * (1.0f - pow(1.0f - dotHV, 5.0f));
+
+    // The half-vector may be incorrectly flipped or invisible to the view direction in some cases, and thus
+    // dotHV may be negative. For this case, we use abs(dotHV) to correct flipping and avoid NaN.
+    return (1.0f.xxx - f) * 1.05 * (1.0f - pow(1.0f - saturate(abs(dotHV)), 5.0f));
 }
 
 /**
  * Calculates the amount to modify the diffuse component of a combined BRDF.
  * @param F0    The fresnel reflectance at grazing angle.
- * @param dotHV The dot product of the half-vector and view direction.
+ * @param dotHV The dot product of the half-vector and view direction (range [-1, 1]).
  * @return The amount to modify diffuse component by.
  */
 float3 diffuseCompensation(float3 F0, float dotHV)
@@ -69,11 +69,17 @@ float3 diffuseCompensation(float3 F0, float dotHV)
 /**
  * Evaluate the Trowbridge-Reitz Normal Distribution Function.
  * @param roughnessAlphaSqr The NDF roughness value squared.
- * @param dotNH             The dot product of the normal and half vector.
+ * @param dotNH             The dot product of the normal and half vector (range [-1, 1]).
  * @return The calculated NDF value.
  */
 float evaluateNDFTrowbridgeReitz(float roughnessAlphaSqr, float dotNH)
 {
+    // Heaviside function for microfacet normal in the upper hemisphere.
+    if (dotNH < 0.0f)
+    {
+        return 0.0f;
+    }
+
     float denom = dotNH * dotNH * (roughnessAlphaSqr - 1.0f) + 1.0f;
     float d = roughnessAlphaSqr / (PI * denom * denom);
     return d;
@@ -82,15 +88,18 @@ float evaluateNDFTrowbridgeReitz(float roughnessAlphaSqr, float dotNH)
 /**
  * Evaluate the GGX Visibility function.
  * @param roughnessAlphaSqr The GGX roughness value squared.
- * @param dotNL             The dot product of the normal and light direction.
- * @param dotNV             The dot product of the normal and view direction.
+ * @param dotNL             The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotNV             The dot product of the normal and view direction (range [-1, 1]).
  * @return The calculated visibility value.
  */
 float evaluateVisibilityGGX(float roughnessAlphaSqr, float dotNL, float dotNV)
 {
+    // The masking-shadowing function is indefinite for back-facing shading normals.
+    // So we use abs(dotNL) and abs(dotNV) for this case.
+    // This is hacky, but still satisfies the reciprocity and energy conservation.
     float rMod = 1.0f - roughnessAlphaSqr;
-    float recipG1 = dotNL + sqrt(roughnessAlphaSqr + (rMod * dotNL * dotNL));
-    float recipG2 = dotNV + sqrt(roughnessAlphaSqr + (rMod * dotNV * dotNV));
+    float recipG1 = abs(dotNL) + sqrt(roughnessAlphaSqr + (rMod * dotNL * dotNL));
+    float recipG2 = abs(dotNV) + sqrt(roughnessAlphaSqr + (rMod * dotNV * dotNV));
     float recipV = recipG1 * recipG2;
     return recipV;
 }
@@ -100,10 +109,10 @@ float evaluateVisibilityGGX(float roughnessAlphaSqr, float dotNL, float dotNV)
  * @param roughnessAlpha    The GGX roughness value.
  * @param roughnessAlphaSqr The GGX roughness value squared.
  * @param F0                The fresnel reflectance at grazing angle.
- * @param dotHV             The dot product of the half-vector and view direction.
- * @param dotNH             The dot product of the normal and half vector.
- * @param dotNL             The dot product of the normal and light direction.
- * @param dotNV             The dot product of the normal and view direction.
+ * @param dotHV             The dot product of the half-vector and view direction (range [-1, 1]).
+ * @param dotNH             The dot product of the normal and half vector (range [-1, 1]).
+ * @param dotNL             The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotNV             The dot product of the normal and view direction (range [-1, 1]).
  * @param fresnelOut        (Out) The returned fresnel value.
  * @return The calculated reflectance.
  */
@@ -134,10 +143,10 @@ float3 evaluateLambert(float3 albedo)
 /**
  * Evaluate the combined BRDF.
  * @param material Material data describing BRDF.
- * @param dotNH    The dot product of the normal and half vector.
- * @param dotNL    The dot product of the normal and light direction.
- * @param dotHV    The dot product of the half-vector and view direction.
- * @param dotNV    The dot product of the normal and view direction.
+ * @param dotHV    The dot product of the half-vector and view direction (range [-1, 1]).
+ * @param dotNH    The dot product of the normal and half vector (range [-1, 1]).
+ * @param dotNL    The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotNV    The dot product of the normal and view direction (range [-1, 1]).
  * @return The calculated reflectance.
  */
 float3 evaluateBRDF(MaterialBRDF material, float dotHV, float dotNH, float dotNL, float dotNV)
@@ -145,18 +154,97 @@ float3 evaluateBRDF(MaterialBRDF material, float dotHV, float dotNH, float dotNL
     // Calculate diffuse component
     float3 diffuse = evaluateLambert(material.albedo);
 
-#ifndef DISABLE_SPECULAR_LIGHTING
+#ifndef DISABLE_SPECULAR_MATERIALS
     // Calculate specular component
     float3 f;
     float3 specular = evaluateGGX(material.roughnessAlpha, material.roughnessAlphaSqr, material.F0, dotHV, dotNH, dotNL, dotNV, f);
 
     // Add the weight of the diffuse compensation term
     diffuse *= diffuseCompensationTerm(f, dotHV);
-    float3 brdf = (specular + diffuse) * dotNL;
+    float3 brdf = (specular + diffuse) * saturate(dotNL); // saturate(dotNL) = abs(dotNL) * Heaviside function for the upper hemisphere.
 #else
     // Add the weight of the diffuse compensation term to prevent excessive brightness compared to specular
     diffuse *= diffuseCompensation(fresnel(0.04f.xxx, dotHV), dotHV);
-    float3 brdf = diffuse * dotNL;
+    float3 brdf = diffuse * saturate(dotNL);
+#endif
+    return brdf;
+}
+
+/**
+ * Evaluate the diffuse component of the BRDF.
+ * @param material Material data describing BRDF.
+ * @param dotHV    The dot product of the half-vector and view direction (range [-1, 1]).
+ * @param dotNL    The dot product of the normal and light direction (range [-1, 1]).
+ * @return The calculated reflectance.
+ */
+float3 evaluateBRDFDiffuse(MaterialBRDF material, float dotHV, float dotNL)
+{
+    // Calculate diffuse component
+    float3 diffuse = evaluateLambert(material.albedo);
+
+    // Add the weight of the diffuse compensation term to prevent excessive brightness compared to specular
+    diffuse *= diffuseCompensation(fresnel(0.04f.xxx, dotHV), dotHV);
+    float3 brdf = diffuse * saturate(dotNL);
+    return brdf;
+}
+
+#ifndef DISABLE_SPECULAR_MATERIALS
+/**
+ * Evaluate the specular component of the BRDF.
+ * @param material Material data describing BRDF.
+ * @param dotNH    The dot product of the normal and half vector (range [-1, 1]).
+ * @param dotNL    The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotHV    The dot product of the half-vector and view direction (range [-1, 1]).
+ * @param dotNV    The dot product of the normal and view direction (range [-1, 1]).
+ * @return The calculated reflectance.
+ */
+float3 evaluateBRDFSpecular(MaterialBRDF material, float dotHV, float dotNH, float dotNL, float dotNV)
+{
+    // Calculate specular component
+    float3 f;
+    float3 specular = evaluateGGX(material.roughnessAlpha, material.roughnessAlphaSqr, material.F0, dotHV, dotNH, dotNL, dotNV, f);
+
+    float3 brdf = specular * saturate(dotNL); // saturate(dotNL) = abs(dotNL) * Heaviside function for the upper hemisphere.
+    return brdf;
+}
+#endif
+
+/**
+ * Evaluate the combined BRDF.
+ * @param material       Material data describing BRDF.
+ * @param normal         Shading normal vector at current position (must be normalised).
+ * @param viewDirection  Outgoing ray view direction (must be normalised).
+ * @param lightDirection The direction to the sampled light (must be normalised).
+ * @return The calculated reflectance.
+ */
+float3 evaluateBRDF(MaterialBRDF material, float3 normal, float3 viewDirection, float3 lightDirection, out float3 diffuse, out float3 specular)
+{
+    // Calculate diffuse component
+    diffuse = evaluateLambert(material.albedo);
+
+    // Calculate shading angles
+    float dotNL = clamp(dot(normal, lightDirection), -1.0f, 1.0f);
+    // Calculate half vector
+    float3 halfVector = normalize(viewDirection + lightDirection);
+    float dotHV = saturate(dot(halfVector, viewDirection));
+#ifndef DISABLE_SPECULAR_MATERIALS
+    float dotNH = clamp(dot(normal, halfVector), -1.0f, 1.0f);
+    float dotNV = clamp(dot(normal, viewDirection), -1.0f, 1.0f);
+
+    // Calculate specular component
+    float3 f;
+    specular = evaluateGGX(material.roughnessAlpha, material.roughnessAlphaSqr, material.F0, dotHV, dotNH, dotNL, dotNV, f);
+
+    // Add the weight of the diffuse compensation term
+    specular *= saturate(dotNL);    // saturate(dotNL) = abs(dotNL) * Heaviside function for the upper hemisphere.
+    diffuse *= saturate(dotNL);
+    diffuse *= diffuseCompensationTerm(f, dotHV);
+    float3 brdf = specular + diffuse;
+#else
+    // Add the weight of the diffuse compensation term to prevent excessive brightness compared to specular
+    diffuse *= diffuseCompensation(0.04f.xxx, dotHV);
+    specular = 0.f;
+    float3 brdf = diffuse * saturate(dotNL);
 #endif
     return brdf;
 }
@@ -171,33 +259,9 @@ float3 evaluateBRDF(MaterialBRDF material, float dotHV, float dotNH, float dotNL
  */
 float3 evaluateBRDF(MaterialBRDF material, float3 normal, float3 viewDirection, float3 lightDirection)
 {
-    // Calculate diffuse component
-    float3 diffuse = evaluateLambert(material.albedo);
-
-    // Calculate shading angles
-    float dotNL = saturate(dot(normal, lightDirection));
-#ifndef DISABLE_SPECULAR_LIGHTING
-    // Calculate half vector
-    float3 halfVector = normalize(viewDirection + lightDirection);
-    float dotHV = saturate(dot(halfVector, viewDirection));
-    float dotNH = saturate(dot(normal, halfVector));
-    float dotNV = saturate(dot(normal, viewDirection));
-
-    // Calculate specular component
-    float3 f;
-    float3 specular = evaluateGGX(material.roughnessAlpha, material.roughnessAlphaSqr, material.F0, dotHV, dotNH, dotNL, dotNV, f);
-
-    // Add the weight of the diffuse compensation term
-    diffuse *= diffuseCompensationTerm(f, dotHV);
-    float3 brdf = (specular + diffuse) * dotNL;
-#else
-    // Add the weight of the diffuse compensation term to prevent excessive brightness compared to specular
-    float3 halfVector = normalize(viewDirection + lightDirection);
-    float dotHV = saturate(dot(halfVector, viewDirection));
-    diffuse *= diffuseCompensation(0.04f.xxx, dotHV);
-    float3 brdf = diffuse * dotNL;
-#endif
-    return brdf;
+    float3 diffuse;
+    float3 specular;
+    return evaluateBRDF(material, normal, viewDirection, lightDirection, diffuse, specular);
 }
 
 #endif // MATERIAL_EVALUATION_HLSL

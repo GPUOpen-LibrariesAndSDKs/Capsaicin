@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -68,7 +68,7 @@ public:
      * Gets timestamp queries.
      * @returns The timestamp queries.
      */
-    virtual TimestampQuery const *getTimestampQueries() const noexcept;
+    virtual std::vector<TimestampQuery> const &getTimestampQueries() const noexcept;
 
     /** Resets the timed section queries */
     virtual void resetQueries() noexcept;
@@ -89,6 +89,6 @@ protected:
     std::vector<TimestampQuery> queries;        /**< The array of timestamp queries. */
     uint32_t                    queryCount = 0; /**< The number of timestamp queries. */
     GfxContext                  gfx_;           /**< The rendering context to be used. */
-    std::string_view            name_;          /**< The name of the render technique. */
+    std::string_view            name_;          /**< The name of the timeable. */
 };
 } // namespace Capsaicin

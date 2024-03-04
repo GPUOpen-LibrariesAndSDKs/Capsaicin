@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,7 @@ THE SOFTWARE.
 #define LIGHT_EVALUATION_HLSL
 
 #include "lights.hlsl"
-#include "../math/geometry.hlsl"
+#include "../geometry/geometry.hlsl"
 #include "../math/math_constants.hlsl"
 #include "../math/sampling.hlsl"
 #include "../math/pack.hlsl"
@@ -36,6 +36,10 @@ Texture2D g_TextureMaps[] : register(space99);
 
 SamplerState g_TextureSampler;
 */
+
+#if (!defined(DISABLE_AREA_LIGHTS) && (!defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS))) || !defined(DISABLE_DELTA_LIGHTS) || (!defined(DISABLE_ENVIRONMENT_LIGHTS) && (!defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_AREA_LIGHTS)))
+#   define HAS_MULTIPLE_LIGHT_TYPES
+#endif
 
 /**
  * Get the emitted light from a given area light.
@@ -54,7 +58,11 @@ float3 evaluateAreaLight(LightArea light, float2 barycentric)
     {
         // Determine texture UVs
         float2 uv = interpolate(light.uv0, light.uv1, light.uv2, barycentric);
-        emissivity *= g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, 0.0f).xyz;
+        float4 textureValue = g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, 0.0f);
+        emissivity *= textureValue.xyz;
+
+        // Combine with texture alpha map
+        emissivity *= textureValue.www;
     }
     return emissivity;
 }
@@ -106,13 +114,18 @@ float3 evaluateAreaLightCone(LightArea light, float2 barycentric, float3 positio
         // Calculate surface area of triangle
         float lightArea = 0.5f * lightNormalLength;
 
+        // Calculate texture LOD based on projected area
         float dotDN = abs(dot(direction, lightNormal));
         width = min(lightArea, width); //Clamp so cannot be greater than actual size of triangle
         float angle = log2(width / dotDN);
         float lod = offset + angle;
 
-        // Calculate texture LOD based on projected area
-        emissivity *= g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, lod).xyz;
+        // Get texture emission
+        float4 textureValue = g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, lod);
+        emissivity *= textureValue.xyz;
+
+        // Combine with texture alpha map
+        emissivity *= textureValue.www;
     }
     return emissivity;
 }
@@ -207,27 +220,32 @@ float3 evaluateDirectionalLight(LightDirectional light)
  */
 float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
 {
-#ifndef DISABLE_AREA_LIGHTS
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    if (selectedLight.get_light_type() == kLight_Area)
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    return 0.0f.xxx;
+#else
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
 #   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
     {
         // Get the area light
         LightArea light = MakeLightArea(selectedLight);
 
-        // TODO calculate intersection of ray (position, direction) with triangle to calculate UV
-        //  This^ is going to be slow so potentially look at storing this value or just stick with the below hack
-        float2 lightUV = float2(0.5f, 0.5f);
+        // Calculating intersection of ray (position, direction) with triangle to calculate UV is expensive so we approximate to the triangle center.
+        float2 lightUV = (1.0f / 3.0f).xx;
 
         // Evaluate the selected area light
         return evaluateAreaLight(light, lightUV);
     }
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
-#   endif
-#endif
-#ifndef DISABLE_DELTA_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Point)
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
     {
         // Get the point light
         LightPoint light = MakeLightPoint(selectedLight);
@@ -235,7 +253,7 @@ float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
         // Evaluate the selected point light
         return evaluatePointLight(light, position);
     }
-    else if (selectedLight.get_light_type() == kLight_Spot)
+    else if (lightType == kLight_Spot)
     {
         // Get the spot light
         LightSpot light = MakeLightSpot(selectedLight);
@@ -244,9 +262,9 @@ float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
         return evaluateSpotLight(light, position);
     }
     else
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Direction)
-#   endif
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
     {
         // Get the directional light
         LightDirectional light = MakeLightDirectional(selectedLight);
@@ -254,12 +272,12 @@ float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
         // Evaluate the selected directional light
         return evaluateDirectionalLight(light);
     }
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
     else
-#   endif
-#endif
-#ifndef DISABLE_ENVIRONMENT_LIGHTS
-    /*selectedLight.get_light_type() == kLight_Environment*/
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
     {
         // Get the environment light
         LightEnvironment light = MakeLightEnvironment(selectedLight);
@@ -267,9 +285,7 @@ float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
         // Evaluate the environment map
         return evaluateEnvironmentLight(light, direction);
     }
-#endif
-#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
-    return 0.0f.xxx;
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif
 }
 
@@ -283,27 +299,32 @@ float3 evaluateLight(Light selectedLight, float3 position, float3 direction)
  */
 float3 evaluateLightCone(Light selectedLight, float3 position, float3 direction, float solidAngle)
 {
-#ifndef DISABLE_AREA_LIGHTS
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    if (selectedLight.get_light_type() == kLight_Area)
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    return 0.0f.xxx;
+#else
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
 #   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
     {
         // Get the area light
         LightArea light = MakeLightArea(selectedLight);
 
-        // TODO calculate intersection of ray (position, direction) with triangle to calculate UV
-        //  This^ is going to be slow so potentially look at storing this value or just stick with the below hack
-        float2 lightUV = float2(0.5f, 0.5f);
+        // Calculating intersection of ray (position, direction) with triangle to calculate UV is expensive so we approximate to the triangle center.
+        float2 lightUV = (1.0f / 3.0f).xx;
 
         // Evaluate the selected area light
         return evaluateAreaLightCone(light, lightUV, position, solidAngle);
     }
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
-#   endif
-#endif
-#ifndef DISABLE_DELTA_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Point)
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
     {
         // Get the point light
         LightPoint light = MakeLightPoint(selectedLight);
@@ -311,7 +332,7 @@ float3 evaluateLightCone(Light selectedLight, float3 position, float3 direction,
         // Evaluate the selected point light
         return evaluatePointLight(light, position);
     }
-    else if (selectedLight.get_light_type() == kLight_Spot)
+    else if (lightType == kLight_Spot)
     {
         // Get the spot light
         LightSpot light = MakeLightSpot(selectedLight);
@@ -320,9 +341,9 @@ float3 evaluateLightCone(Light selectedLight, float3 position, float3 direction,
         return evaluateSpotLight(light, position);
     }
     else
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Direction)
-#   endif
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
     {
         // Get the directional light
         LightDirectional light = MakeLightDirectional(selectedLight);
@@ -330,12 +351,12 @@ float3 evaluateLightCone(Light selectedLight, float3 position, float3 direction,
         // Evaluate the selected directional light
         return evaluateDirectionalLight(light);
     }
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
     else
-#   endif
-#endif
-#ifndef DISABLE_ENVIRONMENT_LIGHTS
-    /*selectedLight.get_light_type() == kLight_Environment*/
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
     {
         // Get the environment light
         LightEnvironment light = MakeLightEnvironment(selectedLight);
@@ -343,78 +364,84 @@ float3 evaluateLightCone(Light selectedLight, float3 position, float3 direction,
         // Evaluate the environment map
         return evaluateEnvironmentLightCone(light, direction, solidAngle);
     }
-#endif
-#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
-    return 0.0f.xxx;
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif
 }
 
 /**
- * Get the incident light from a sampled light using a uv value returned from @sampleLightUnorm
+ * Get the incident light from a sampled light using sample values returned from @sampleLight
  * @param selectedLight  The light that was sampled.
  * @param position       Current position on surface to get direction from.
- * @param sampleParams   UV values returned from @sampleLightUnorm.
+ * @param sampleParams   UV values returned from @sampleLight.
  * @param lightDirection (Out) The direction to the sampled light.
  * @param lightPosition  (Out) The position of the sampled light (contains invalid data in case of directional or environment lights).
  * @return The visible light.
  */
 float3 evaluateLightSampled(Light selectedLight, float3 position, float2 sampleParams, out float3 lightDirection, out float3 lightPosition)
 {
-#ifndef DISABLE_AREA_LIGHTS
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    if (selectedLight.get_light_type() == kLight_Area)
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    lightDirection = 0.0f.xxx;
+    lightPosition = 0.0f.xxx;
+    return 0.0f.xxx;
+#else
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
 #   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
     {
         // Get the area light
         LightArea light = MakeLightArea(selectedLight);
         // Calculate direction
-        lightPosition = interpolate(light.v0.xyz, light.v1.xyz, light.v2.xyz, sampleParams);
+        lightPosition = interpolate(light.v0, light.v1, light.v2, sampleParams);
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected area light
         return evaluateAreaLight(light, sampleParams);
     }
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
-#   endif
-#endif
-#ifndef DISABLE_DELTA_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Point)
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
     {
         // Get the point light
         LightPoint light = MakeLightPoint(selectedLight);
         // Calculate direction
-        lightPosition = light.position.xyz;
+        lightPosition = light.position;
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected point light
         return evaluatePointLight(light, position);
     }
-    else if (selectedLight.get_light_type() == kLight_Spot)
+    else if (lightType == kLight_Spot)
     {
         // Get the spot light
         LightSpot light = MakeLightSpot(selectedLight);
         // Calculate direction
-        lightPosition = light.position.xyz;
+        lightPosition = light.position;
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected spot light
         return evaluateSpotLight(light, position);
     }
     else
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Direction)
-#   endif
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
     {
         // Get the directional light
         LightDirectional light = MakeLightDirectional(selectedLight);
-        lightDirection = light.direction.xyz;
+        lightDirection = light.direction;
         // Evaluate the selected directional light
         return evaluateDirectionalLight(light);
     }
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
     else
-#   endif
-#endif
-#ifndef DISABLE_ENVIRONMENT_LIGHTS
-    /*selectedLight.get_light_type() == kLight_Environment*/
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
     {
         // Convert stored uv back to direction
         lightDirection = MapToSphere(sampleParams);
@@ -423,19 +450,15 @@ float3 evaluateLightSampled(Light selectedLight, float3 position, float2 sampleP
         // Evaluate the environment map
         return evaluateEnvironmentLight(light, lightDirection);
     }
-#endif
-#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
-    lightDirection = 0.0f.xxx;
-    lightPosition = 0.0f.xxx;
-    return 0.0f.xxx;
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif
 }
 
 /**
- * Get the incident light from a sampled light using a uv value returned from @sampleLightUnorm
+ * Get the incident light from a sampled light using a sample values returned from @sampleLightCone
  * @param selectedLight  The light that was sampled.
  * @param position       Current position on surface to get direction from.
- * @param sampleParams   UV values returned from @sampleLightUnorm.
+ * @param sampleParams   UV values returned from @sampleLight.
  * @param solidAngle     Solid angle of visible light surface, used for evaluating across light surface.
  * @param lightDirection (Out) The direction to the sampled light.
  * @param lightPosition  (Out) The position of the sampled light (contains invalid data in case of directional or environment lights).
@@ -443,61 +466,69 @@ float3 evaluateLightSampled(Light selectedLight, float3 position, float2 sampleP
  */
 float3 evaluateLightConeSampled(Light selectedLight, float3 position, float2 sampleParams, float solidAngle, out float3 lightDirection, out float3 lightPosition)
 {
-#ifndef DISABLE_AREA_LIGHTS
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    if (selectedLight.get_light_type() == kLight_Area)
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    lightDirection = 0.0f.xxx;
+    lightPosition = 0.0f.xxx;
+    return 0.0f.xxx;
+#else
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
 #   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
     {
         // Get the area light
         LightArea light = MakeLightArea(selectedLight);
         // Calculate direction
-        lightPosition = interpolate(light.v0.xyz, light.v1.xyz, light.v2.xyz, sampleParams);
+        lightPosition = interpolate(light.v0, light.v1, light.v2, sampleParams);
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected area light
         return evaluateAreaLightCone(light, sampleParams, position, solidAngle);
     }
-#   if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
-#   endif
-#endif
-#ifndef DISABLE_DELTA_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Point)
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
     {
         // Get the point light
         LightPoint light = MakeLightPoint(selectedLight);
         // Calculate direction
-        lightPosition = light.position.xyz;
+        lightPosition = light.position;
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected point light
         return evaluatePointLight(light, position);
     }
-    else if (selectedLight.get_light_type() == kLight_Spot)
+    else if (lightType == kLight_Spot)
     {
         // Get the spot light
         LightSpot light = MakeLightSpot(selectedLight);
         // Calculate direction
-        lightPosition = light.position.xyz;
+        lightPosition = light.position;
         lightDirection = normalize(lightPosition - position);
         // Evaluate the selected spot light
         return evaluateSpotLight(light, position);
     }
     else
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
-    if (selectedLight.get_light_type() == kLight_Direction)
-#   endif
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
     {
         // Get the directional light
         LightDirectional light = MakeLightDirectional(selectedLight);
-        lightDirection = light.direction.xyz;
+        lightDirection = light.direction;
         // Evaluate the selected directional light
         return evaluateDirectionalLight(light);
     }
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
     else
-#   endif
-#endif
-#ifndef DISABLE_ENVIRONMENT_LIGHTS
-    /*selectedLight.get_light_type() == kLight_Environment*/
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
     {
         // Convert stored uv back to direction
         lightDirection = MapToSphere(sampleParams);
@@ -506,11 +537,7 @@ float3 evaluateLightConeSampled(Light selectedLight, float3 position, float2 sam
         // Evaluate the environment map
         return evaluateEnvironmentLightCone(light, lightDirection, solidAngle);
     }
-#endif
-#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
-    lightDirection = 0.0f.xxx;
-    lightPosition = 0.0f.xxx;
-    return 0.0f.xxx;
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif
 }
 

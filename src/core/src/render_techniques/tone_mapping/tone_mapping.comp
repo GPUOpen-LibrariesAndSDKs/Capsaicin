@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,13 @@ THE SOFTWARE.
 #include "../../math/color.hlsl"
 
 uint2 g_BufferDimensions;
+uint  g_FrameIndex;
 float g_Exposure;
 
 RWTexture2D<float4> g_InputBuffer;
 RWTexture2D<float4> g_OutputBuffer;
+
+#include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"
 
 float3 EvalLogContrastFunc(in float3 color, in float epsilon, in float logMidpoint, in float contrast)
 {
@@ -44,6 +47,14 @@ float3 tonemapSimple(in float3 color)
     return lerp((peak / (peak + 1.0f)) * ratio, color, blend_amount);
 }
 
+float3 ditherColor(in uint2 pixel, in float3 color)
+{
+    float v = BlueNoise_Sample1D(pixel, g_FrameIndex);
+    float o = 2.0f * v - 1.0f; // to (-1, 1) range
+    v = max(o / sqrt(abs(o)), -1.0f);
+    return color + v / 255.0f;
+}
+
 [numthreads(8, 8, 1)]
 void Tonemap(in uint2 did : SV_DispatchThreadID)
 {
@@ -54,6 +65,7 @@ void Tonemap(in uint2 did : SV_DispatchThreadID)
     color = saturate(tonemapSimple(color));
     color = EvalLogContrastFunc(1.2f * color, 1e-5f, 0.18f, 1.2f);
     color = convertToSRGB(color);
+    color = ditherColor(did, color);
 
     g_OutputBuffer[did] = float4(color, 1.0f);
 }

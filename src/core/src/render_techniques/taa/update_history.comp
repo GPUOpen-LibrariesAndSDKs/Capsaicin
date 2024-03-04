@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,16 +21,25 @@ THE SOFTWARE.
 ********************************************************************/
 #include "../../gpu_shared.h"
 
+#ifdef HAS_DIRECT_LIGHTING_BUFFER
 Texture2D g_DirectLightingBuffer;
+#endif
+#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
 Texture2D g_GlobalIlluminationBuffer;
+#endif
 
 RWTexture2D<float4> g_PrevCombinedIlluminationBuffer;
 
 [numthreads(8, 8, 1)]
 void UpdateHistory(in uint2 did : SV_DispatchThreadID)
 {
-    float3 direct_lighting     = g_DirectLightingBuffer.Load(int3(did, 0)).xyz;
-    float3 global_illumination = g_GlobalIlluminationBuffer.Load(int3(did, 0)).xyz;
+    float3 colour = 0.0f.xxx;
+#ifdef HAS_DIRECT_LIGHTING_BUFFER
+    colour += g_DirectLightingBuffer.Load(int3(did, 0)).xyz;
+#endif
+#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
+    colour += g_GlobalIlluminationBuffer.Load(int3(did, 0)).xyz;
+#endif
 
-    g_PrevCombinedIlluminationBuffer[did] = float4(direct_lighting + global_illumination, 1.0f);
+    g_PrevCombinedIlluminationBuffer[did] = float4(colour, 1.0f);
 }

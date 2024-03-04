@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,8 @@ THE SOFTWARE.
 #pragma once
 
 #include "gpu_shared.h"
+
+#include <gfx.h>
 
 namespace Capsaicin
 {
@@ -50,10 +52,21 @@ public:
 
     /**
      * Initialise the internal data based on current configuration.
+     * @param gfx        Active gfx context.
+     * @param shaderPath Path to shader files based on current working directory.
+     * @param type       The object type to reduce.
+     * @param operation  The type of operation to perform.
+     * @return True, if any initialisation/changes succeeded.
+     */
+    bool initialise(
+        GfxContext gfx, std::string_view const &shaderPath, Type type, Operation operation) noexcept;
+
+    /**
+     * Initialise the internal data based on current configuration.
      * @param capsaicin Current framework context.
      * @param type      The object type to sort.
      * @param operation The type of operation to perform.
-     * @return True, if any initialisation/changes actually where needed.
+     * @return True, if any initialisation/changes succeeded.
      */
     bool initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept;
 
@@ -179,7 +192,7 @@ private:
      *  key are supported).
      */
     void sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeysList,
-        uint maxNumKeys, uint numSegments = -1, GfxBuffer const *numKeys = nullptr,
+        uint maxNumKeys, uint numSegments = UINT_MAX, GfxBuffer const *numKeys = nullptr,
         GfxBuffer const *sourcePayload = nullptr) noexcept;
 
     GfxContext gfx;

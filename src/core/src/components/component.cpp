@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,7 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-Component::Component(Key, std::string_view const &name) noexcept
+Component::Component(std::string_view const &name) noexcept
     : Timeable(name)
 {}
 
@@ -42,4 +42,6 @@ BufferList Component::getBuffers() const noexcept
 {
     return {};
 }
+
+void Component::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const noexcept {}
 } // namespace Capsaicin

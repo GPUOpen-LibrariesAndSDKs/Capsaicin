@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,7 @@ THE SOFTWARE.
 
 #include "main_shared.h"
 
-int32_t WinMain(HINSTANCE, HINSTANCE, LPSTR, int32_t)
+int32_t WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int32_t)
 {
     CapsaicinMain main("Capsaicin - Scene Viewer");
     if (!main.run())

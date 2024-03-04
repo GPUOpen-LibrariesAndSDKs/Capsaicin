@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,7 +27,7 @@ float4 g_InvDeviceZ; //
 
 ConstantBuffer<SSGIConstants> g_SSGIConstants;
 Texture2D<float> g_DepthBuffer;
-Texture2D<float3> g_NormalBuffer;
+Texture2D<float3> g_ShadingNormalBuffer;
 Texture2D<float3> g_LightingBuffer;
 RWTexture2D<float4> g_OcclusionAndBentNormalBuffer;
 RWTexture2D<float4> g_NearFieldGlobalIlluminationBuffer;
@@ -138,7 +138,7 @@ void Main(int2 did : SV_DispatchThreadID)
     }
 
     float2 uv            = (did + 0.5f) / (g_SSGIConstants.buffer_dimensions);
-    float3 normal = g_NormalBuffer.SampleLevel(g_PointSampler, uv, 0);
+    float3 normal = g_ShadingNormalBuffer.SampleLevel(g_PointSampler, uv, 0);
     if (dot(normal, normal) == 0.0f)
     {
         g_OcclusionAndBentNormalBuffer[did] = float4(0.f, 0.f, 0.f, 0.f);
@@ -208,7 +208,7 @@ void Main(int2 did : SV_DispatchThreadID)
                     // From h3r2tic's demo
                     // https://github.com/h3r2tic/rtoy-samples/blob/main/assets/shaders/ssgi/ssgi.glsl
                     float3 sample_lighting     = g_LightingBuffer.SampleLevel(g_PointSampler, sample_uv, 0);
-                    float3 sample_world_normal = normalize(2.0f * g_NormalBuffer.SampleLevel(g_PointSampler, sample_uv, 0) - 1.f);
+                    float3 sample_world_normal = normalize(2.0f * g_ShadingNormalBuffer.SampleLevel(g_PointSampler, sample_uv, 0) - 1.f);
 
                     if (step_index > 0)
                     {

@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -28,15 +28,16 @@ TextureCube g_EnvironmentBuffer;
 
 SamplerState g_LinearSampler;
 
+#include "../../math/transform.hlsl"
+
 float4 main(in float4 pos : SV_Position) : SV_Target
 {
     float2 uv  = pos.xy / g_BufferDimensions;
     float2 ndc = 2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f;
 
-    float4 world = mul(g_ViewProjectionInverse, float4(ndc, 1.0f, 1.0f));
-    world /= world.w;   // perspective divide
+    float3 world = transformPointProjection(float3(ndc, 1.0f), g_ViewProjectionInverse);
 
-    float3 sky_sample = g_EnvironmentBuffer.Sample(g_LinearSampler, world.xyz - g_Eye).xyz;
+    float3 sky_sample = g_EnvironmentBuffer.Sample(g_LinearSampler, world - g_Eye).xyz;
 
     return float4(sky_sample, 1.0f);
 }

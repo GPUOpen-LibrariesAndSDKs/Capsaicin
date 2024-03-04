@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,7 +21,6 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
-#include "capsaicin.h"
 #include "factory.h"
 #include "render_technique.h"
 
@@ -30,23 +29,24 @@ THE SOFTWARE.
 namespace Capsaicin
 {
 /** A abstract renderer class used to encapsulate all required operations to setup a rendering work flow. */
-class Renderer : public Factory<Renderer>
+class Renderer
 {
     Renderer(Renderer const &)            = delete;
     Renderer &operator=(Renderer const &) = delete;
 
 public:
-    Renderer(Key) noexcept {}
+    Renderer() noexcept = default;
 
     /**
      * Sets up the required render techniques.
-     * @param render_settings The current global render settings.
+     * @param renderOptions The current global render options.
      * @return A list of all required render techniques in the order that they are required. The calling
      * function takes all ownership of the returned list.
      */
     virtual std::vector<std::unique_ptr<RenderTechnique>> setupRenderTechniques(
-        RenderSettings const &render_settings) noexcept = 0;
-
-private:
+        RenderOptionList const &renderOptions) noexcept = 0;
 };
+
+class RendererFactory : public Factory<Renderer>
+{};
 } // namespace Capsaicin

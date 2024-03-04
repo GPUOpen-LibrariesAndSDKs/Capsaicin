@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -29,10 +29,27 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
+StratifiedSampler::StratifiedSampler() noexcept
+    : Component(Name)
+{}
+
 StratifiedSampler::~StratifiedSampler() noexcept
 {
-    gfxDestroyBuffer(gfx_, seedBuffer);
-    gfxDestroyBuffer(gfx_, sobolBuffer);
+    terminate();
+}
+
+RenderOptionList StratifiedSampler::getRenderOptions() noexcept
+{
+    RenderOptionList newOptions;
+    newOptions.emplace(RENDER_OPTION_MAKE(stratified_sampler_deterministic, options));
+    return newOptions;
+}
+
+StratifiedSampler::RenderOptions StratifiedSampler::convertOptions(RenderOptionList const &options) noexcept
+{
+    RenderOptions newOptions;
+    RENDER_OPTION_GET(stratified_sampler_deterministic, newOptions, options)
+    return newOptions;
 }
 
 bool StratifiedSampler::init(CapsaicinInternal const &capsaicin) noexcept
@@ -41,12 +58,23 @@ bool StratifiedSampler::init(CapsaicinInternal const &capsaicin) noexcept
         sizeof(uint32_t) * std::max(capsaicin.getWidth(), 1920u) * std::max(capsaicin.getHeight(), 1080u);
 
     std::vector<uint32_t>                   seedBufferData;
-    std::random_device                      rd;
-    std::mt19937                            gen(rd());
-    std::uniform_int_distribution<uint32_t> distrib(0, std::numeric_limits<uint32_t>::max());
-    for (uint32_t i = 0; i < seedBufferSize; i += 4)
+    seedBufferData.reserve(seedBufferSize);
+    if (options.stratified_sampler_deterministic)
     {
-        seedBufferData.push_back(distrib(gen));
+        std::mt19937 gen(5489U);
+        for (uint32_t i = 0; i < seedBufferSize; i += 4)
+        {
+            seedBufferData.push_back(gen());
+        }
+    }
+    else
+    {
+        std::random_device                      rd;
+        std::mt19937                            gen(rd());
+        for (uint32_t i = 0; i < seedBufferSize; i += 4)
+        {
+            seedBufferData.push_back(gen());
+        }
     }
     seedBuffer = gfxCreateBuffer<uint32_t>(gfx_, (uint32_t)seedBufferData.size(), seedBufferData.data());
     seedBuffer.setName("StratifiedSampler_SeedBuffer");
@@ -61,11 +89,16 @@ bool StratifiedSampler::init(CapsaicinInternal const &capsaicin) noexcept
 
 void StratifiedSampler::run(CapsaicinInternal &capsaicin) noexcept
 {
+    // Check for option changed
+    auto const optionsNew = convertOptions(capsaicin.getOptions());
+    bool update = optionsNew.stratified_sampler_deterministic != options.stratified_sampler_deterministic;
+    options = optionsNew;
+
     // Check if seed buffer needs to be re-initialised
     uint64_t const seedBufferSize =
         sizeof(uint32_t) * std::max(capsaicin.getWidth(), 1920u) * std::max(capsaicin.getHeight(), 1080u);
 
-    if (seedBufferSize > seedBuffer.getSize())
+    if (update || seedBufferSize > seedBuffer.getSize())
     {
         GfxCommandEvent const command_event(gfx_, "InitStratifiedSampler");
 
@@ -75,8 +108,16 @@ void StratifiedSampler::run(CapsaicinInternal &capsaicin) noexcept
     }
 }
 
+void StratifiedSampler::terminate() noexcept
+{
+    gfxDestroyBuffer(gfx_, seedBuffer);
+    seedBuffer = {};
+    gfxDestroyBuffer(gfx_, sobolBuffer);
+    sobolBuffer = {};
+}
+
 void StratifiedSampler::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_SeedBuffer", seedBuffer);
     gfxProgramSetParameter(gfx_, program, "g_SobolXorsBuffer", sobolBuffer);

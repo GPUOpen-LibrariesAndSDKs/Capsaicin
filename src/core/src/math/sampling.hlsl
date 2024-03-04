@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +25,68 @@ THE SOFTWARE.
 
 #include "math_constants.hlsl"
 #include "math.hlsl"
+
+/**
+ * Transforms a 3D vector to a position in the unit square.
+ * @param direction The input direction (must be normalised).
+ * @returns The 2D mapped value [0, 1].
+ */
+float2 mapToHemiOctahedron(float3 direction)
+{
+    // Modified version of "Fast Equal-Area Mapping of the (Hemi)Sphere using SIMD" - Clarberg
+    float3 absDir = abs(direction);
+
+    float radius = sqrt(1.0f - absDir.z);
+    float a = hmax(absDir.xy);
+    float b = hmin(absDir.xy);
+    b = a == 0.0f ? 0.0f : b / a;
+
+    float phi = atan(b) * (2.0f / PI);
+    phi = (absDir.x >= absDir.y) ? phi : 1.0f - phi;
+
+    float t = phi * radius;
+    float s = radius - t;
+    float2 st = float2(s, t);
+    st *= sign(direction).xy;
+
+    // Since we only care about the hemisphere above the surface we rescale and center the output
+    //   value range to the it occupies the whole unit square
+    st = float2(st.x + st.y, st.x - st.y);
+
+    // Transform from [-1,1] to [0,1]
+    st = 0.5f.xx * st + 0.5f.xx;
+
+    return st;
+}
+
+/**
+ * Transforms a mapped position in the unit square back to a 3D direction vector.
+ * @param mapped The mapped position created using mapToHemiOctahedron.
+ * @returns The 3D direction vector.
+ */
+float3 mapToHemiOctahedronInverse(float2 mapped)
+{
+    // Transform from [0,1] to [-1,1]
+    float2 st = 2.0f.xx * mapped - 1.0f.xx;
+
+    // Transform from unit square to diamond corresponding to +hemisphere
+    st = float2(st.x + st.y, st.x - st.y) * 0.5f;
+
+    float2 absMapped = abs(st);
+    float distance = 1.0f - hadd(absMapped);
+    float radius = 1.0f - abs(distance);
+
+    float phi = (radius == 0.0f) ? 0.0f : QUARTER_PI * ((absMapped.y - absMapped.x) / radius + 1.0f);
+    float radiusSqr = radius * radius;
+    float sinTheta = radius * sqrt(2.0f - radiusSqr);
+    float sinPhi, cosPhi;
+    sincos(phi, sinPhi, cosPhi);
+    float x = sinTheta * sign(st.x) * cosPhi;
+    float y = sinTheta * sign(st.y) * sinPhi;
+    float z = sign(distance) * (1.0f - radiusSqr);
+
+    return float3(x, y, z);
+}
 
 void GetOrthoVectors(in float3 n, out float3 b1, out float3 b2)
 {

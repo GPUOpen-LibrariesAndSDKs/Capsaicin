@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,20 +25,40 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class StratifiedSampler : public Component::RegistrarName<StratifiedSampler>
+class StratifiedSampler
+    : public Component
+    , public ComponentFactory::Registrar<StratifiedSampler>
 {
 public:
     static constexpr std::string_view Name = "StratifiedSampler";
-
-    /** Constructor. */
-    StratifiedSampler() noexcept {}
 
     StratifiedSampler(StratifiedSampler const &) noexcept = delete;
 
     StratifiedSampler(StratifiedSampler &&) noexcept = default;
 
+    /** Constructor. */
+    StratifiedSampler() noexcept;
+
     /** Destructor. */
-    virtual ~StratifiedSampler() noexcept;
+    ~StratifiedSampler() noexcept;
+
+    /*
+     * Gets configuration options for current technique.
+     * @return A list of all valid configuration options.
+     */
+    RenderOptionList getRenderOptions() noexcept override;
+
+    struct RenderOptions
+    {
+        bool stratified_sampler_deterministic = true; /**< Use deterministic seeding of random numbers */
+    };
+
+    /**
+     * Convert render options to internal options format.
+     * @param options Current render options.
+     * @returns The options converted.
+     */
+    static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
     /**
      * Initialise any internal data or state.
@@ -56,13 +76,19 @@ public:
     void run(CapsaicinInternal &capsaicin) noexcept override;
 
     /**
+     * Destroy any used internal resources and shutdown.
+     */
+    void terminate() noexcept override;
+
+    /**
      * Add the required program parameters to a shader based on current settings.
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    virtual void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
 
 private:
+    RenderOptions options;
     GfxBuffer seedBuffer;
     GfxBuffer sobolBuffer;
 };

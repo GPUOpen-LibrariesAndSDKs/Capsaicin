@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,31 +23,31 @@ THE SOFTWARE.
 #ifndef MATH_CONSTANTS_HLSL
 #define MATH_CONSTANTS_HLSL
 
-#ifndef QUARTER_PI
+#ifndef QUARTER_PI   // pi/4
 #define QUARTER_PI   0.78539816339744830961566084581988
 #endif
 
-#ifndef HALF_PI
+#ifndef HALF_PI      // pi/2
 #define HALF_PI      1.5707963267948966192313216916398
 #endif
 
-#ifndef PI
+#ifndef PI           // pi
 #define PI           3.1415926535897932384626433832795
 #endif
 
-#ifndef TWO_PI
+#ifndef TWO_PI       // 2pi
 #define TWO_PI       6.283185307179586476925286766559
 #endif
 
-#ifndef FOUR_PI
+#ifndef FOUR_PI      // 4pi
 #define FOUR_PI      12.566370614359172953850573533118
 #endif
 
-#ifndef INV_TWO_PI
+#ifndef INV_TWO_PI   // 1/(2pi)
 #define INV_TWO_PI   0.15915494309189533576888376337251
 #endif
 
-#ifndef INV_FOUR_PI
+#ifndef INV_FOUR_PI  // 1/(4pi)
 #define INV_FOUR_PI  0.07957747154594766788444188168626
 #endif
 

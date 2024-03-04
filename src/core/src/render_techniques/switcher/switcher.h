@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -57,7 +57,7 @@ public:
     {}
 
     /** Defaulted destructor */
-    ~Switcher() = default;
+    ~Switcher() { terminate(); }
 
     /*
      * Gets configuration options for current technique.
@@ -72,11 +72,11 @@ public:
     }
 
     /**
-     * Convert render settings to internal options format.
-     * @param settings Current render settings.
+     * Convert render options to internal options format.
+     * @param options Current render options.
      * @returns The options converted.
      */
-    static RenderOptions convertOptions(RenderSettings const &settings) noexcept
+    static RenderOptions convertOptions(RenderOptionList const &options) noexcept
     {
         RenderOptions newOptions;
         newOptions.mixer_use_second_technique = *std::get_if<decltype(options.mixer_use_second_technique)>(
@@ -137,6 +137,7 @@ public:
      */
     bool init(CapsaicinInternal const &capsaicin) noexcept override
     {
+        options = convertOptions(capsaicin.getOptions());
         if (!options.mixer_use_second_technique)
         {
             return technique1.init(capsaicin);
@@ -153,7 +154,21 @@ public:
      */
     void render(CapsaicinInternal &capsaicin) noexcept override
     {
-        options = convertOptions(capsaicin.getRenderSettings());
+        auto const optionsNew = convertOptions(capsaicin.getOptions());
+        if (optionsNew.light_sampler_type != options.light_sampler_type)
+        {
+            if (!options.mixer_use_second_technique)
+            {
+                technique1.terminate();
+                technique2.init(capsaicin);
+            }
+            else
+            {
+                technique2.terminate();
+                technique1.init(capsaicin);
+            }
+        }
+        options = optionsNew;
         if (!options.mixer_use_second_technique)
         {
             technique1.render(capsaicin);
@@ -161,6 +176,21 @@ public:
         else
         {
             technique2.render(capsaicin);
+        }
+    }
+
+    /**
+     * Destroy any used internal resources and shutdown.
+     */
+    void terminate() noexcept override
+    {
+        if (!options.mixer_use_second_technique)
+        {
+            return technique1.terminate();
+        }
+        else
+        {
+            return technique2.terminate();
         }
     }
 

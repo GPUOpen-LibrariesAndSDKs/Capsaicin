@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -38,25 +38,41 @@ AOVList UpdateHistory::getAOVs() const noexcept
 {
     AOVList aovs;
     aovs.push_back({"PrevCombinedIllumination", AOV::Write, AOV::Accumulate, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"DirectLighting"});
-    aovs.push_back({"GlobalIllumination"});
+    aovs.push_back({.name = "DirectLighting", .flags = AOV::Optional});
+    aovs.push_back({.name = "GlobalIllumination", .flags = AOV::Optional});
     return aovs;
 }
 
 bool UpdateHistory::init(CapsaicinInternal const &capsaicin) noexcept
 {
+    std::vector<char const *> defines;
+    if (capsaicin.hasAOVBuffer("DirectLighting"))
+    {
+        defines.push_back("HAS_DIRECT_LIGHTING_BUFFER");
+    }
+    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
+    {
+        defines.push_back("HAS_GLOBAL_ILLUMINATION_BUFFER");
+    }
     update_history_program_ =
         gfxCreateProgram(gfx_, "render_techniques/taa/update_history", capsaicin.getShaderPath());
-    update_history_kernel_ = gfxCreateComputeKernel(gfx_, update_history_program_, "UpdateHistory");
+    update_history_kernel_ = gfxCreateComputeKernel(
+        gfx_, update_history_program_, "UpdateHistory", defines.data(), (uint32_t)defines.size());
     return !!update_history_program_;
 }
 
 void UpdateHistory::render(CapsaicinInternal &capsaicin) noexcept
 {
-    gfxProgramSetParameter(
-        gfx_, update_history_program_, "g_DirectLightingBuffer", capsaicin.getAOVBuffer("DirectLighting"));
-    gfxProgramSetParameter(gfx_, update_history_program_, "g_GlobalIlluminationBuffer",
-        capsaicin.getAOVBuffer("GlobalIllumination"));
+    if (capsaicin.hasAOVBuffer("DirectLighting"))
+    {
+        gfxProgramSetParameter(gfx_, update_history_program_, "g_DirectLightingBuffer",
+            capsaicin.getAOVBuffer("DirectLighting"));
+    }
+    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
+    {
+        gfxProgramSetParameter(gfx_, update_history_program_, "g_GlobalIlluminationBuffer",
+            capsaicin.getAOVBuffer("GlobalIllumination"));
+    }
 
     gfxProgramSetParameter(gfx_, update_history_program_, "g_PrevCombinedIlluminationBuffer",
         capsaicin.getAOVBuffer("PrevCombinedIllumination"));
@@ -69,7 +85,7 @@ void UpdateHistory::render(CapsaicinInternal &capsaicin) noexcept
     gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
 }
 
-void UpdateHistory::terminate()
+void UpdateHistory::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, update_history_program_);
     gfxDestroyKernel(gfx_, update_history_kernel_);

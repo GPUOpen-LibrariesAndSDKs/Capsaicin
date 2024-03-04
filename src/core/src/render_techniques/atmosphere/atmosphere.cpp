@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -55,10 +55,10 @@ RenderOptionList Atmosphere::getRenderOptions() noexcept
     return newOptions;
 }
 
-Atmosphere::RenderOptions Atmosphere::convertOptions(RenderSettings const &settings) noexcept
+Atmosphere::RenderOptions Atmosphere::convertOptions(RenderOptionList const &options) noexcept
 {
     RenderOptions newOptions;
-    RENDER_OPTION_GET(atmosphere_enable, newOptions, settings.options_)
+    RENDER_OPTION_GET(atmosphere_enable, newOptions, options)
     return newOptions;
 }
 
@@ -73,7 +73,7 @@ bool Atmosphere::init(CapsaicinInternal const &capsaicin) noexcept
 
 void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
 {
-    options = convertOptions(capsaicin.getRenderSettings());
+    options = convertOptions(capsaicin.getOptions());
     if (!options.atmosphere_enable) return;
 
     GfxTexture environment_buffer = capsaicin.getEnvironmentBuffer();
@@ -147,7 +147,7 @@ void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
     }
 }
 
-void Atmosphere::terminate()
+void Atmosphere::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, atmosphere_program_);
     gfxDestroyKernel(gfx_, draw_atmosphere_kernel_);

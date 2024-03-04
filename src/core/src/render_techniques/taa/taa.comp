@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +25,7 @@ THE SOFTWARE.
 
 #define RADIUS      1
 
-#define GROUP_SIZE  16
+#define GROUP_SIZE  8
 
 #define TILE_DIM    (2 * RADIUS + GROUP_SIZE)
 
@@ -38,8 +38,12 @@ Texture2D g_VelocityBuffer;
 
 RWTexture2D<float4> g_ColorBuffer;
 RWTexture2D<float4> g_OutputBuffer;
+#ifdef HAS_DIRECT_LIGHTING_BUFFER
 Texture2D           g_DirectLightingBuffer;
+#endif
+#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
 Texture2D           g_GlobalIlluminationBuffer;
+#endif
 
 SamplerState g_LinearSampler;
 SamplerState g_NearestSampler;
@@ -189,15 +193,24 @@ void ResolveTemporal(in uint2 globalID : SV_DispatchThreadID, in uint2 localID :
         float2 uv3 = (coord3 + 0.5f) * texel_size;
         float2 uv4 = (coord4 + 0.5f) * texel_size;
 
-        float3 color0 = g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;
-        float3 color1 = g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;
-        float3 color2 = g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;
-        float3 color3 = g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;
+        float3 color0 = 0.0f.xxx;
+        float3 color1 = 0.0f.xxx;
+        float3 color2 = 0.0f.xxx;
+        float3 color3 = 0.0f.xxx;
 
+#ifdef HAS_DIRECT_LIGHTING_BUFFER
+        color0 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;
+        color1 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;
+        color2 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;
+        color3 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;
+#endif
+
+#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
         color0 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;
         color1 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;
         color2 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;
         color3 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;
+#endif
 
         Tile[localIndex]                               = saturate(color0);
         Tile[localIndex + TILE_DIM * TILE_DIM / 4]     = saturate(color1);
@@ -253,10 +266,15 @@ void ResolveTemporal(in uint2 globalID : SV_DispatchThreadID, in uint2 localID :
 [numthreads(8, 8, 1)]
 void ResolvePassthru(in uint2 did : SV_DispatchThreadID)
 {
-    float3 color = g_DirectLightingBuffer.Load(int3(did, 0)).xyz;
-    color += g_GlobalIlluminationBuffer.Load(int3(did, 0)).xyz;
+    float3 colour = 0.0f.xxx;
+#ifdef HAS_DIRECT_LIGHTING_BUFFER
+    colour += g_DirectLightingBuffer.Load(int3(did, 0)).xyz;
+#endif
+#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
+    colour += g_GlobalIlluminationBuffer.Load(int3(did, 0)).xyz;
+#endif
 
-    g_ColorBuffer[did] = float4(color, 1.0f);
+    g_ColorBuffer[did] = float4(colour, 1.0f);
 }
 
 [numthreads(8, 8, 1)]

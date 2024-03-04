@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,7 @@ THE SOFTWARE.
 #ifndef GI10_HLSL
 #define GI10_HLSL
 
+#include "../../math/transform.hlsl"
 #include "../../math/math_constants.hlsl"
 
 // A define for marking invalid identifiers:
@@ -54,25 +55,7 @@ float4 GetLinearDepth(in float4 depth)
 
 float3 InverseProject(in float4x4 transform, in float2 uv, in float depth)
 {
-    float4 homogeneous = mul(transform, float4(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth, 1.0f));
-    return homogeneous.xyz / homogeneous.w; // perspective divide
-}
-
-// Assume input on [-1, 1]. Output is normalized on +Z hemisphere.
-float3 hemioct_to_float32x3(in float2 e)
-{
-    float2 temp = float2(e.x + e.y, e.x - e.y) * 0.5f;
-    float3 v = float3(temp, 1.0f - abs(temp.x) - abs(temp.y));
-    return normalize(v);
-}
-
-// Assume normalized input on +Z hemisphere. Output is on [-1, 1].
-float2 float32x3_to_hemioct(in float3 v)
-{
-    // Project the hemisphere onto the hemi-octahedron, and then into the xy plane
-    float2 p = v.xy * (1.0f / (abs(v.x) + abs(v.y) + v.z));
-    // Rotate and scale the center diamond to the unit square
-    return float2(p.x + p.y, p.x - p.y);
+    return transformPointProjection(float3(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth), transform);
 }
 
 #define origin()        (1.0f / 32.0f)

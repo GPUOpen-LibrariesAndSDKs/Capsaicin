@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,6 +21,7 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
@@ -311,11 +312,15 @@ public:
     constexpr size_t rfind(char ch, size_t start = Size - 1) const noexcept
     {
         if (start > Size - 1) return npos;
-        for (size_t i = start; i >= 0; --i)
+        for (size_t i = start; ; --i)
         {
             if (dataArray[i] == ch)
             {
                 return i;
+            }
+            if (i == 0)
+            {
+                break;
             }
         }
         return npos;
@@ -333,7 +338,7 @@ public:
         StaticString<Size2> const &subString, const size_t start = Size - Size2) const noexcept
     {
         if (Size < Size2 || start > Size - Size2) return npos;
-        for (size_t i = start; i >= 0; --i)
+        for (size_t i = start; ; --i)
         {
             for (size_t j = 0; j < Size2; ++j)
             {
@@ -345,6 +350,10 @@ public:
                 {
                     return i;
                 }
+            }
+            if (i == 0)
+            {
+                break;
             }
         }
         return npos;

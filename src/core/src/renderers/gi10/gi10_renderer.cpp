@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -32,23 +32,25 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-/** The GI1.0 renderer. */
-class GI10Renderer : public Renderer::Registrar<GI10Renderer>
+/** The GI-1.0 renderer. */
+class GI10Renderer
+    : public Renderer
+    , public RendererFactory::Registrar<GI10Renderer>
 {
 public:
-    static constexpr std::string_view Name = "GI-1.0";
+    static constexpr std::string_view Name = "GI-1.1";
 
     /** Default constructor. */
-    GI10Renderer() noexcept {}
+    GI10Renderer() noexcept {};
 
     /**
      * Sets up the required render techniques.
-     * @param render_settings The current global render settings.
+     * @param renderOptions The current global render options.
      * @return A list of all required render techniques in the order that they are required. The calling
      * function takes all ownership of the returned list.
      */
     std::vector<std::unique_ptr<RenderTechnique>> setupRenderTechniques(
-        RenderSettings const &render_settings) noexcept override
+        [[maybe_unused]] RenderOptionList const &renderOptions) noexcept override
     {
         std::vector<std::unique_ptr<RenderTechnique>> render_techniques;
         render_techniques.emplace_back(std::make_unique<VisibilityBuffer>());
@@ -61,7 +63,5 @@ public:
         render_techniques.emplace_back(std::make_unique<ToneMapping>());
         return render_techniques;
     }
-
-private:
 };
 } // namespace Capsaicin

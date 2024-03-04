@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -31,11 +31,11 @@ GPUReduce::~GPUReduce() noexcept
     terminate();
 }
 
-bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+bool GPUReduce::initialise(
+    GfxContext gfxIn, std::string_view const &shaderPath, Type type, Operation operation) noexcept
 {
-    gfx = capsaicin.getGfx();
+    gfx = gfxIn;
 
-    bool ret = false;
     if (!indirectBuffer)
     {
         // Free just in case
@@ -52,7 +52,6 @@ bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operat
         indirectCountBuffer.setName("Capsaicin_Reduce_IndirectCountBuffer");
         indirectCountBuffer2 = gfxCreateBuffer<uint>(gfx, 1);
         indirectCountBuffer2.setName("Capsaicin_Reduce_IndirectCountBuffer2");
-        ret = true;
     }
 
     if (type != currentType || operation != currentOperation)
@@ -71,7 +70,7 @@ bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operat
         gfxDestroyKernel(gfx, reduceKernel);
         gfxDestroyKernel(gfx, reduceIndirectKernel);
         gfxDestroyKernel(gfx, dispatchIndirectKernel);
-        reduceProgram = gfxCreateProgram(gfx, "utilities/gpu_reduce", capsaicin.getShaderPath());
+        reduceProgram = gfxCreateProgram(gfx, "utilities/gpu_reduce", shaderPath.data());
         std::vector<char const *> baseDefines;
         switch (currentType)
         {
@@ -87,6 +86,10 @@ bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operat
         case Type::Int2: baseDefines.push_back("TYPE=int2"); break;
         case Type::Int3: baseDefines.push_back("TYPE=int3"); break;
         case Type::Int4: baseDefines.push_back("TYPE=int4"); break;
+        case Type::Double:  baseDefines.push_back("TYPE=double"); break;
+        case Type::Double2: baseDefines.push_back("TYPE=double2"); break;
+        case Type::Double3: baseDefines.push_back("TYPE=double3"); break;
+        case Type::Double4: baseDefines.push_back("TYPE=double4"); break;
         default: break;
         }
         switch (currentOperation)
@@ -102,10 +105,14 @@ bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operat
               baseDefines.data(), static_cast<uint32_t>(baseDefines.size()));
         dispatchIndirectKernel = gfxCreateComputeKernel(gfx, reduceProgram, "GenerateDispatches",
             baseDefines.data(), static_cast<uint32_t>(baseDefines.size()));
-        ret                    = true;
     }
 
-    return ret;
+    return !!dispatchIndirectKernel;
+}
+
+bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+{
+    return initialise(capsaicin.getGfx(), capsaicin.getShaderPath(), type, operation);
 }
 
 void GPUReduce::terminate() noexcept
@@ -149,9 +156,12 @@ bool GPUReduce::reduceInternal(
     bool indirect = (numKeys != nullptr);
 
     // Calculate number of loops
-    uint32_t const *numThreads = gfxKernelGetNumThreads(gfx, reduceKernel);
-    const uint32_t  numGroups1 = (maxNumKeys + numThreads[0] - 1) / numThreads[0];
-    const uint32_t  numGroups2 = (numGroups1 + numThreads[0] - 1) / numThreads[0];
+    uint32_t const *numThreads    = gfxKernelGetNumThreads(gfx, reduceKernel);
+    const uint      groupSize     = numThreads[0];
+    const uint      keysPerThread = 4; // Must match KEYS_PER_THREAD in shader
+    const uint      keysPerGroup  = groupSize * keysPerThread;
+    const uint32_t  numGroups1    = (maxNumKeys + keysPerGroup - 1) / keysPerGroup;
+    const uint32_t  numGroups2    = (numGroups1 + keysPerGroup - 1) / keysPerGroup;
     if (numGroups2 > numThreads[0])
     {
         // To many keys as we only support 2 loops
@@ -161,6 +171,7 @@ bool GPUReduce::reduceInternal(
     if (indirect)
     {
         // Call indirect setup kernel
+        gfxProgramSetParameter(gfx, reduceProgram, "g_InputLength", *numKeys);
         gfxProgramSetParameter(gfx, reduceProgram, "g_Dispatch1", indirectBuffer);
         gfxProgramSetParameter(gfx, reduceProgram, "g_Dispatch2", indirectBuffer2);
         gfxProgramSetParameter(gfx, reduceProgram, "g_InputLength1", indirectCountBuffer);
@@ -183,11 +194,11 @@ bool GPUReduce::reduceInternal(
     {
         gfxProgramSetParameter(gfx, reduceProgram, "g_Count", maxNumKeys);
     }
-    if (numGroups1 > 1 && numGroups2 > 1)
+    if (numGroups1 > 1)
     {
         // Create scratch buffer needed for loops
-        const uint64_t typeSize          = ((uint32_t)currentType % 4) * sizeof(float);
-        const uint64_t scratchBufferSize = maxNumKeys * typeSize;
+        const uint64_t typeSize = (((uint64_t)currentType % 4) + 1) * (currentType >= Type::Double ? sizeof(double) : sizeof(float));
+        const uint64_t scratchBufferSize = numGroups1 * typeSize;
         if (!scratchBuffer || (scratchBuffer.getSize() < scratchBufferSize))
         {
             gfxDestroyBuffer(gfx, scratchBuffer);

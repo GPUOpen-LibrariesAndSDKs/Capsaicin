@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,7 +19,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
+
 #include "../../gpu_shared.h"
+#include "../../math/transform.hlsl"
 
 float3   g_Eye;
 float2   g_NearFar;
@@ -28,7 +30,7 @@ float4x4 g_Reprojection;
 float4x4 g_ViewProjectionInverse;
 
 Texture2D g_DepthBuffer;
-Texture2D g_NormalBuffer;
+Texture2D g_GeometryNormalBuffer;
 Texture2D g_VelocityBuffer;
 Texture2D g_PreviousDepthBuffer;
 
@@ -75,13 +77,11 @@ void main(in uint2 did : SV_DispatchThreadID)
 
     if (depth < 1.0f && all(previous_uv > 0.0f) && all(previous_uv < 1.0f))
     {
-        float4 clip_space = mul(g_Reprojection, float4(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth, 1.0f));
-        clip_space        = clip_space / clip_space.w;  // perspective divide
-        float3 normal     = normalize(2.0f * g_NormalBuffer.SampleLevel(g_NearestSampler, uv, 0.0f).xyz - 1.0f);
+        float3 clip_space = transformPointProjection(float3(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth), g_Reprojection);
+        float3 normal     = normalize(2.0f * g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0.0f).xyz - 1.0f);
 
-        float4 world_pos  = mul(g_ViewProjectionInverse, float4(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth, 1.0f));
-        world_pos         = world_pos / world_pos.w;    // perspective divide
-        float3 view_dir   = normalize(g_Eye - world_pos.xyz);
+        float3 world_pos = transformPointProjection(float3(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth), g_ViewProjectionInverse);
+        float3 view_dir   = normalize(g_Eye - world_pos);
 
         float z_alignment     = pow(1.0f - max(dot(view_dir, normal), 0.0f), 6.0f);
         depth                 = GetLinearDepth(clip_space.z);   // get linear depth
