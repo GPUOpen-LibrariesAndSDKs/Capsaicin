@@ -629,8 +629,8 @@ void PatchScreenProbes(in uint did : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
-    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
-                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_count = ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size)
+                               * ((g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size);
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
 
@@ -1096,8 +1096,8 @@ void PopulateScreenProbesTraceRay(uint did, inout PopulateScreenProbesPayload pa
 
 void PopulateScreenProbes(uint did)
 {
-    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
-                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_count = ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size)
+                               * ((g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size);
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
 
@@ -1162,8 +1162,8 @@ void PopulateScreenProbesMain(in uint did : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
-    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
-                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_count = ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size)
+                               * ((g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size);
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
 
@@ -1352,8 +1352,8 @@ void ReorderScreenProbes(in uint did : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void FilterScreenProbes(in uint did : SV_DispatchThreadID)
 {
-    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
-                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_count = ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size)
+                               * ((g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size);
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
 
@@ -1441,8 +1441,8 @@ void FilterScreenProbes(in uint did : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
-    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
-                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_count = ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size)
+                               * ((g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size);
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
 
