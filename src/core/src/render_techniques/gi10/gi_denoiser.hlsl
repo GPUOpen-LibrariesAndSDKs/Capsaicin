@@ -23,6 +23,10 @@ THE SOFTWARE.
 #ifndef GI_DENOISER_HLSL
 #define GI_DENOISER_HLSL
 
+// Blur mask texture format is R8_SNORM, with -1 encoding sky pixels and [0, 127] (actually [0, 8]) encoding the blur radius
+#define kGIDenoiser_BlurMaskUnpack 127.f
+#define kGIDenoiser_BlurMaskPack   (1.f / kGIDenoiser_BlurMaskUnpack)
+
 #define kGIDenoiser_BlurRadius    4
 #define kGIDenoiser_BlurGroupSize 8
 #define kGIDenoiser_BlurTileDim  (2 * kGIDenoiser_BlurRadius + kGIDenoiser_BlurGroupSize)

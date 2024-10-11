@@ -3656,7 +3656,7 @@ void ReprojectGI(in uint2 did : SV_DispatchThreadID)
         lighting *= (max_sample_count / lighting.w);
     }
 
-    g_GIDenoiser_BlurMask[did]         = blur_mask / 127.0f;
+    g_GIDenoiser_BlurMask[did]         = blur_mask * kGIDenoiser_BlurMaskPack;
     g_GIDenoiser_ColorBuffer[did]      = lighting;
     g_GIDenoiser_ColorDeltaBuffer[did] = color_delta;
 }
@@ -3678,10 +3678,10 @@ void FilterBlurMask(in uint2 did : SV_DispatchThreadID, in uint2 lid : SV_GroupT
         int2 coord3 = anchor + int2((local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 2)     % kGIDenoiser_BlurTileDim, (local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 2)     / kGIDenoiser_BlurTileDim);
         int2 coord4 = anchor + int2((local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim * 3 / 4) % kGIDenoiser_BlurTileDim, (local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim * 3 / 4) / kGIDenoiser_BlurTileDim);
 
-        float blur_mask_0 = g_GIDenoiser_BlurMask[clamp(coord1, 0, int2(g_BufferDimensions) - 1)].x;
-        float blur_mask_1 = g_GIDenoiser_BlurMask[clamp(coord2, 0, int2(g_BufferDimensions) - 1)].x;
-        float blur_mask_2 = g_GIDenoiser_BlurMask[clamp(coord3, 0, int2(g_BufferDimensions) - 1)].x;
-        float blur_mask_3 = g_GIDenoiser_BlurMask[clamp(coord4, 0, int2(g_BufferDimensions) - 1)].x;
+        float blur_mask_0 = g_GIDenoiser_BlurMask[clamp(coord1, 0, int2(g_BufferDimensions) - 1)].x * kGIDenoiser_BlurMaskUnpack;
+        float blur_mask_1 = g_GIDenoiser_BlurMask[clamp(coord2, 0, int2(g_BufferDimensions) - 1)].x * kGIDenoiser_BlurMaskUnpack;
+        float blur_mask_2 = g_GIDenoiser_BlurMask[clamp(coord3, 0, int2(g_BufferDimensions) - 1)].x * kGIDenoiser_BlurMaskUnpack;
+        float blur_mask_3 = g_GIDenoiser_BlurMask[clamp(coord4, 0, int2(g_BufferDimensions) - 1)].x * kGIDenoiser_BlurMaskUnpack;
 
         lds_GIDenoiser_BlurMask[local_id]                                                             = blur_mask_0;
         lds_GIDenoiser_BlurMask[local_id + kGIDenoiser_BlurTileDim * kGIDenoiser_BlurTileDim / 4]     = blur_mask_1;
@@ -3725,7 +3725,7 @@ void FilterBlurMask(in uint2 did : SV_DispatchThreadID, in uint2 lid : SV_GroupT
         InterlockedAdd(g_GIDenoiser_BlurSampleCountBuffer[0], lds_GIDenoiser_BlurSampleCount);
     }
 
-    g_GIDenoiser_BlurredBlurMask[did] = blur_mask;
+    g_GIDenoiser_BlurredBlurMask[did] = blur_mask * kGIDenoiser_BlurMaskPack;
 }
 
 [numthreads(8, 8, 1)]
