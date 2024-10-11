@@ -3705,7 +3705,7 @@ void FilterBlurMask(in uint2 did : SV_DispatchThreadID, in uint2 lid : SV_GroupT
         {
             for (int x = -kGIDenoiser_BlurRadius; x <= kGIDenoiser_BlurRadius; ++x)
             {
-                if (x != 0 && y != 0)   // center element was already processed
+                if(x != 0 || y != 0) // center element was already processed
                 {
                     float s = GIDenoiser_TapBlurMask(tile_pos + float2(x, y));
                     float d = sqrt(float(x * x + y * y));
