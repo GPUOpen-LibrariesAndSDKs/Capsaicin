@@ -108,8 +108,8 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(CapsaicinInternal const &capsai
     uint32_t const probe_mask_mip_count = gfxCalculateMipCount(probe_count[0], probe_count[1]);
 
     uint32_t const max_probe_count = probe_count[0] * probe_count[1];
-    max_probe_spawn_count          = (buffer_width + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_
-                          * (buffer_height + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_;
+    max_probe_spawn_count          = ((buffer_width + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_)
+                          * ((buffer_height + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_);
 
     max_ray_count = max_probe_spawn_count * probe_size_ * probe_size_;
 
