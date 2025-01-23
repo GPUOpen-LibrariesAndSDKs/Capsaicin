@@ -23,6 +23,9 @@ THE SOFTWARE.
 #ifndef LIGHTS_SHARED_H
 #define LIGHTS_SHARED_H
 
+#ifdef _WIN32
+#include <algorithm>
+#endif
 #include "../gpu_shared.h"
 
 enum LightType
