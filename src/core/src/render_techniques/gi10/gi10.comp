@@ -73,6 +73,10 @@ RWStructuredBuffer<DispatchRaysCommand> g_DispatchRaysCommandBuffer;
 RWTexture2D<float4>                     g_GlobalIlluminationBuffer;
 Texture2D                               g_PrevCombinedIlluminationBuffer;
 
+// DIY
+
+RWTexture2D<float4> g_RedTexture;
+
 RaytracingAccelerationStructure g_Scene;
 
 TextureCube g_EnvironmentBuffer;
@@ -216,6 +220,16 @@ void GenerateDispatchRays()
     dispatch_rays_command.padding[1] = 0;
     dispatch_rays_command.padding[2] = 0;
     g_DispatchRaysCommandBuffer[0] = dispatch_rays_command;
+}
+
+// DIY
+[numthreads(1, 1, 1)]
+void MakeRed(in uint2 did : SV_DispatchThreadID)
+{
+    float4 radiance = float4(0, 1, 0, 1);
+    
+    g_RedTexture[did] = radiance;
+
 }
 
 //!
@@ -1324,6 +1338,7 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
     }
 
     g_ScreenProbes_ProbeBuffer[pos] = radiance;
+
 }
 
 [numthreads(64, 1, 1)]

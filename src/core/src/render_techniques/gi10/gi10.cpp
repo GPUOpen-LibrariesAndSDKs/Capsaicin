@@ -1314,6 +1314,11 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     compact_screen_probes_kernel_   = gfxCreateComputeKernel(gfx_, gi10_program_, "CompactScreenProbes");
     patch_screen_probes_kernel_     = gfxCreateComputeKernel(gfx_, gi10_program_, "PatchScreenProbes");
     sample_screen_probes_kernel_    = gfxCreateComputeKernel(gfx_, gi10_program_, "SampleScreenProbes");
+
+    // DIY
+
+    make_red_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "MakeRed");
+
     if (options_.gi10_use_dxr10)
     {
         std::vector<char const *> base_subobjects;
@@ -1436,6 +1441,12 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
         gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R16G16B16A16_FLOAT);
     irradiance_buffer_.setName("Capsaicin_IrradianceBuffer");
 
+    // DIY
+    
+    red_texture_ =
+        gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+    red_texture_.setName("RedTexture");
+
     // Reserve position values with light bounds sampler
     light_sampler->reserveBoundsValues(screen_probes_.max_ray_count, this);
 
@@ -1528,6 +1539,15 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
             gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R16G16B16A16_FLOAT);
         irradiance_buffer_.setName("Capsaicin_IrradianceBuffer");
     }
+
+    // DIY
+    if (red_texture_.getWidth() != capsaicin.getWidth())
+    {
+        red_texture_ = gfxCreateTexture2D(
+            gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+        red_texture_.setName("RedTexture");
+    }
+    
 
     // Allocate and populate our constant data
     GfxBuffer gi10_constants               = capsaicin.allocateConstantBuffer<GI10Constants>(1);
@@ -1942,6 +1962,16 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
 
         gfxCommandBindKernel(gfx_, clear_bucket_overflow_count_kernel_);
         gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
+    }
+
+    // DIY
+    
+    gfxProgramSetParameter(gfx_, gi10_program_, "g_RedTexture", red_texture_);
+    {
+        TimedSection const timed_section(*this, "MakeRed");
+        
+        gfxCommandBindKernel(gfx_, make_red_kernel_);
+        gfxCommandDispatch(gfx_, red_texture_.getWidth(), red_texture_.getHeight(), 1);
     }
 
     // Purge the unused tiles (square or cube of cells) within our hash-grid cache
@@ -2593,7 +2623,7 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
     // Finally, we can resolve the filtered lighting with the per-pixel material details
     {
         gfxProgramSetParameter(gfx_, gi10_program_, "g_TextureSampler", capsaicin.getAnisotropicSampler());
-
+        gfxProgramSetParameter(gfx_, gi10_program_, "g_RedTexture", red_texture_);
         TimedSection const timed_section(*this, "ResolveGI10");
 
         gfxCommandBindKernel(gfx_, resolve_gi10_kernel_);
@@ -2784,6 +2814,11 @@ void GI10::terminate() noexcept
     gfxDestroyKernel(gfx_, debug_screen_probes_kernel_);
     gfxDestroyKernel(gfx_, debug_hash_grid_cells_kernel_);
     gfxDestroyKernel(gfx_, debug_reflection_kernel_);
+
+    // DIY
+
+    gfxDestroyKernel(gfx_, make_red_kernel_);
+    gfxDestroyTexture(gfx_, red_texture_);
 
     gfxDestroyKernel(gfx_, clear_probe_mask_kernel_);
     gfxDestroyKernel(gfx_, filter_probe_mask_kernel_);

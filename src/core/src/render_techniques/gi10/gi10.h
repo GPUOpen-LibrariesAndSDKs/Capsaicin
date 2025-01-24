@@ -371,6 +371,11 @@ protected:
     GfxKernel  debug_hash_grid_cells_kernel_;
     GfxKernel  debug_reflection_kernel_;
 
+    // DIY
+
+    GfxKernel make_red_kernel_;
+    GfxTexture red_texture_;
+
     // Screen probes kernels:
     GfxKernel clear_probe_mask_kernel_;
     GfxKernel filter_probe_mask_kernel_;

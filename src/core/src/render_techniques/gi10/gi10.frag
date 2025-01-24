@@ -35,6 +35,11 @@ Texture2D g_RoughnessBuffer;
 Texture2D g_VisibilityBuffer;
 Texture2D g_OcclusionAndBentNormalBuffer;
 
+
+// DIY
+
+Texture2D g_RedTexture;
+
 Texture2D g_LutBuffer;
 uint g_LutSize;
 
@@ -46,6 +51,7 @@ StructuredBuffer<Material> g_MaterialBuffer;
 
 RWTexture2D<float4> g_IrradianceBuffer;
 RWTexture2D<float4> g_ReflectionBuffer;
+
 
 Texture2D g_TextureMaps[] : register(space99);
 SamplerState g_NearestSampler;
@@ -116,6 +122,8 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
 
     PS_OUTPUT output;
 
+    
+    
 #ifdef DISABLE_SPECULAR_MATERIALS
 
     float3 irradiance = g_IrradianceBuffer[did].xyz;
@@ -143,7 +151,9 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
     output.lighting = float4(emissiveMaterial.emissive + diffuse + specular, 1.0f);
 
 #endif // DISABLE_SPECULAR_MATERIALS
-
+    
+    // DIY
+    output.lighting = g_RedTexture[did];
     return output;
 }
 
