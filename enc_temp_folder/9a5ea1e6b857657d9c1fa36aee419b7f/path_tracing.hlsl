@@ -223,26 +223,6 @@ void shadeLightHit(RayDesc ray, MaterialBRDF material, float3 normal, float3 vie
 #endif // DISABLE_NON_NEE
 }
 
-// Overload
-void shadeLightHit(RayDesc ray, MaterialBRDF material, float3 normal, float3 viewDirection, float3 throughput,
-    float lightPDF, float3 radianceLi, Light selectedLight, inout float3 radiance, bool firstHit)
-{
-#ifdef DISABLE_NON_NEE
-    float3 sampleReflectance = evaluateBRDF(material, normal, viewDirection, ray.Direction);
-    radiance += throughput * sampleReflectance * radianceLi / lightPDF.xxx;
-#else
-    // Evaluate BRDF for new light direction and calculate combined PDF for current sample
-    float3 sampleReflectance;
-    float samplePDF = sampleBRDFPDFAndEvalute(material, normal, viewDirection, ray.Direction, sampleReflectance, firstHit);
-    if (samplePDF != 0.0f)
-    {
-        bool deltaLight = isDeltaLight(selectedLight);
-        float weight = (!deltaLight) ? heuristicMIS(lightPDF, samplePDF) : 1.0f;
-        radiance += throughput * sampleReflectance * radianceLi * (weight / lightPDF).xxx;
-    }
-#endif // DISABLE_NON_NEE
-}
-
 /**
  * Calculates a new light ray direction from a surface by sampling the scenes lighting.
  * @tparam RNG The type of random number sampler to be used.
@@ -352,7 +332,6 @@ void sampleLightsNEE(MaterialBRDF material, inout StratifiedSampler randomStrati
     }
 }
 
-// Same as above, except we want to know if we're on the first hit
 void sampleLightsNEEFirstHitInfo(MaterialBRDF material, inout StratifiedSampler randomStratified, LightSampler lightSampler,
     float3 position, float3 normal, float3 geometryNormal, float3 viewDirection, float3 throughput, inout pathPayload radiance, bool firstHit)
 {
@@ -383,7 +362,7 @@ void sampleLightsNEEFirstHitInfo(MaterialBRDF material, inout StratifiedSampler 
 #ifdef USE_CUSTOM_HIT_FUNCTIONS
         shadeLightHitCustom(ray, material, normal, viewDirection, throughput, lightPDF, radianceLi, selectedLight, radiance);
 #else
-        shadeLightHit(ray, material, normal, viewDirection, throughput, lightPDF, radianceLi, selectedLight, radiance, firstHit);
+        shadeLightHit(ray, material, normal, viewDirection, throughput, lightPDF, radianceLi, selectedLight, radiance);
 #endif
     }
 }
@@ -418,11 +397,6 @@ bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratifie
     float3 sampleReflectance;
 #endif
     bool specularSampled;
-    
-    if (currentBounce == 0)
-    {
-        materialBRDF.F0 = float3(1, 1, 1);
-    }
     rayDirection = sampleBRDF(materialBRDF, randomStratified, normal, viewDirection, sampleReflectance, samplePDF, specularSampled);
 
     // Reflection debug view: If we decide to bounce diffusely on the first bounce, we terminate the ray
@@ -535,10 +509,8 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
         bool firstHit;
         if (currentBounce == 0)
             firstHit = true;
-        else
-            firstHit = false;
-        sampleLightsNEEFirstHitInfo(materialBRDF, randomStratified, lightSampler, offsetOrigin,
-            iData.normal, iData.geometryNormal, viewDirection, throughput, radiance, firstHit);
+        sampleLightsNEE(materialBRDF, randomStratified, lightSampler, offsetOrigin,
+            iData.normal, iData.geometryNormal, viewDirection, throughput, radiance);
     }
 #endif // DISABLE_NEE
 
