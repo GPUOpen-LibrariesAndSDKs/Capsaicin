@@ -345,7 +345,8 @@ bool ReferencePT::needsRecompile(CapsaicinInternal &capsaicin, RenderOptions con
         || options.reference_pt_nee_only != newOptions.reference_pt_nee_only
         || options.reference_pt_disable_nee != newOptions.reference_pt_disable_nee
         || options.reference_pt_nee_reservoir_resampling != newOptions.reference_pt_nee_reservoir_resampling
-        || options.reference_pt_use_dxr10 != newOptions.reference_pt_use_dxr10;
+        || options.reference_pt_use_dxr10 != newOptions.reference_pt_use_dxr10
+        || options.reference_pt_debug_reflections != newOptions.reference_pt_debug_reflections;
     return recompile;
 }
 
