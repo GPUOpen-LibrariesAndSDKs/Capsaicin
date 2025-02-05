@@ -153,7 +153,7 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
 #endif // DISABLE_SPECULAR_MATERIALS
     
     // DIY
-    output.lighting = g_RedTexture[did];
+    //output.lighting = g_RedTexture[did];
     return output;
 }
 

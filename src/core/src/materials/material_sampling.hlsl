@@ -402,6 +402,37 @@ float sampleBRDFPDFAndEvalute(MaterialBRDF material, float3 normal, float3 viewD
     return samplePDF;
 }
 
+// Overload
+float sampleBRDFPDFAndEvalute(MaterialBRDF material, float3 normal, float3 viewDirection,
+    float3 lightDirection, out float3 reflectance, bool firstHit)
+{
+    // Evaluate BRDF for new light direction
+    float dotNL = clamp(dot(normal, lightDirection), -1.0f, 1.0f);
+    // Calculate half vector
+    float3 halfVector = normalize(viewDirection + lightDirection);
+    // Calculate shading angles
+    float dotHV = saturate(dot(halfVector, viewDirection));
+    float dotNH = clamp(dot(normal, halfVector), -1.0f, 1.0f);
+    float dotNV = clamp(dot(normal, viewDirection), -1.0f, 1.0f);
+    if (firstHit)
+    {
+        reflectance = evaluateBRDFSpecular(material, dotHV, dotNH, dotNL, dotNV);
+    }
+    else
+    {
+        reflectance = evaluateBRDF(material, dotHV, dotNH, dotNL, dotNV);
+    }
+
+    // Transform the view direction into the surfaces tangent coordinate space (oriented so that z axis is aligned to normal)
+    Quaternion localRotation = QuaternionRotationZ(normal);
+    float3 localView = localRotation.transform(viewDirection);
+
+    // Calculate combined PDF for current sample
+    // Note: has some duplicated calculations in evaluateBRDF and sampleBRDFPDF
+    float samplePDF = sampleBRDFPDF(material, dotNH, dotNL, dotHV, dotNV, localView);
+    return samplePDF;
+}
+
 /**
  * Calculate the PDF and evaluate radiance for given values for the diffuse and specular BRDF components separately.
  * @param material            Material data describing BRDF.
@@ -526,6 +557,14 @@ float3 sampleBRDF(MaterialBRDF material, inout RNG randomNG, float3 normal, floa
 {
     bool unused;
     return sampleBRDFType(material, randomNG, normal, viewDirection, reflectance, pdf, unused);
+}
+
+// Overload
+template<typename RNG>
+float3 sampleBRDF(MaterialBRDF material, inout RNG randomNG, float3 normal, float3 viewDirection,
+    out float3 reflectance, out float pdf, out bool specularSampled)
+{
+    return sampleBRDFType(material, randomNG, normal, viewDirection, reflectance, pdf, specularSampled);
 }
 
 /**
