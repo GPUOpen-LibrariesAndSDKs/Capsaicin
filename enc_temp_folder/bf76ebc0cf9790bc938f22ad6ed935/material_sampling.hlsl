@@ -414,7 +414,6 @@ float sampleBRDFPDFAndEvalute(MaterialBRDF material, float3 normal, float3 viewD
     float dotHV = saturate(dot(halfVector, viewDirection));
     float dotNH = clamp(dot(normal, halfVector), -1.0f, 1.0f);
     float dotNV = clamp(dot(normal, viewDirection), -1.0f, 1.0f);
-#ifdef DEBUG_REFLECTIONS
     if (firstHit)
     {
         reflectance = evaluateBRDFSpecular(material, dotHV, dotNH, dotNL, dotNV);
@@ -423,12 +422,7 @@ float sampleBRDFPDFAndEvalute(MaterialBRDF material, float3 normal, float3 viewD
     {
         reflectance = evaluateBRDF(material, dotHV, dotNH, dotNL, dotNV);
     }
-#endif
-    
-#ifndef DEBUG_REFLECTIONS
-    reflectance = evaluateBRDF(material, dotHV, dotNH, dotNL, dotNV);
-#endif
-    
+
     // Transform the view direction into the surfaces tangent coordinate space (oriented so that z axis is aligned to normal)
     Quaternion localRotation = QuaternionRotationZ(normal);
     float3 localView = localRotation.transform(viewDirection);

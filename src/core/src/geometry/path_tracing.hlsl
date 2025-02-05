@@ -419,17 +419,21 @@ bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratifie
 #endif
     bool specularSampled;
     
+#ifdef DEBUG_REFLECTIONS
     if (currentBounce == 0)
     {
         materialBRDF.F0 = float3(1, 1, 1);
     }
+#endif  
     rayDirection = sampleBRDF(materialBRDF, randomStratified, normal, viewDirection, sampleReflectance, samplePDF, specularSampled);
 
+#ifdef DEBUG_REFLECTIONS    
     // Reflection debug view: If we decide to bounce diffusely on the first bounce, we terminate the ray
     if (!specularSampled && currentBounce == 0)
     {
         return false;
     }
+#endif
     
     // Prevent tracing directions below the surface
     if (dot(geometryNormal, rayDirection) <= 0.0f || samplePDF == 0.0f)
@@ -493,7 +497,9 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
     {
         return false;
     }
-     // If the first hit is too rough, then we won't get a reflection, so we terminate the ray
+
+#ifdef DEBUG_REFLECTIONS        
+    // If the first hit is too rough, then we won't get a reflection, so we terminate the ray
     if (currentBounce == 0)
     {
         float2 mesh_uv = interpolate(iData.uv0, iData.uv1, iData.uv2, iData.barycentrics);
@@ -501,6 +507,7 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
         if (materialEvaluated.roughness > 0.6f)
             return false;
     }
+#endif
     
     float3 viewDirection = -ray.Direction;
     // Stop if surface normal places ray behind surface (note surface normal != geometric normal)
@@ -514,6 +521,8 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
     float3 offsetOrigin = offsetPosition(iData.position, iData.geometryNormal);
 
     MaterialBRDF materialBRDF = MakeMaterialBRDF(iData.material, iData.uv);
+
+    
 #ifdef DISABLE_ALBEDO_MATERIAL
     // Disable material albedo if requested
     if (currentBounce == 0)
@@ -600,9 +609,11 @@ void tracePath(RayDesc ray, inout StratifiedSampler randomStratified, inout Ligh
         // Check for valid intersection
         if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
         {
+            #ifdef DEBUG_REFLECTIONS
             //No sky light for reflection debug
             if (currentBounce == 0)
                 break;
+            #endif
             
 #   ifdef USE_CUSTOM_HIT_FUNCTIONS
             shadePathMissCustom(ray, bounce, lightSampler, normal, samplePDF, throughput

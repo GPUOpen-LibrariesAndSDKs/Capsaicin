@@ -57,6 +57,7 @@ public:
         bool reference_pt_nee_reservoir_resampling =
             false;                           /**< Use reservoir resampling for selecting NEE light samples */
         bool reference_pt_use_dxr10 = false; /**< Use dxr 1.0 ray-tracing pipelines instead of inline rt */
+        bool reference_pt_debug_reflections = false;
     };
 
     /**

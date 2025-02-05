@@ -235,7 +235,7 @@ void ReferencePT::renderGUI(CapsaicinInternal &capsaicin) const noexcept
     ImGui::Checkbox(
         "Disable Specular Materials", &capsaicin.getOption<bool>("reference_pt_disable_specular_materials"));
     ImGui::Checkbox(
-        "Debug reflections", &capsaicin.getOption<bool>("reference_pt_debug_reflections"));
+        "Debug reflectiobs", &capsaicin.getOption<bool>("reference_pt_debug_reflections"));
 }
 
 bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
