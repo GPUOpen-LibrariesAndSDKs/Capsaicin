@@ -1448,7 +1448,13 @@ void CapsaicinMain::saveFrame() noexcept
         savePath += ".exr"sv;
     }
     // Save the current frame buffer to disk
-    Capsaicin::DumpAOVBuffer(savePath.c_str(), "Color");
+    auto aov = Capsaicin::GetCurrentDebugView();
+    if (aov == "None")
+    {
+        aov = "Color";
+    }
+
+    Capsaicin::DumpAOVBuffer(savePath.c_str(), aov);
 
     // Disable performing tone mapping as we output in HDR
     if (!saveAsJPEG && Capsaicin::hasOption<bool>("tonemap_enable"))
