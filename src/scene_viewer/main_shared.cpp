@@ -1458,6 +1458,10 @@ void CapsaicinMain::saveFrame() noexcept
     {
         aov = "Color";
     }
+    else if (aov == "Reflection")
+    {
+        aov = "Debug";
+    }
 
     Capsaicin::DumpAOVBuffer(savePath.c_str(), aov);
 
