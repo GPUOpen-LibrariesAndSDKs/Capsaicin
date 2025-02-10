@@ -88,6 +88,11 @@ void CapsaicinInternal::saveImage(
     {
         saveJPG(dump_buffer, dump_buffer_width, dump_buffer_height, file_path);
     }
+    else if (extension != nullptr
+        && (strcmp(extension, ".png") == 0 || strcmp(extension, ".PNG") == 0))
+    {
+        savePNG(dump_buffer, dump_buffer_width, dump_buffer_height, file_path);
+    }
     else
     {
         saveEXR(dump_buffer, dump_buffer_width, dump_buffer_height, file_path);
@@ -205,6 +210,36 @@ void CapsaicinInternal::saveJPG(
     }
 }
 
+
+void CapsaicinInternal::savePNG(GfxBuffer dump_buffer, uint32_t dump_buffer_width, uint32_t dump_buffer_height, char const* png_file_path)
+{
+    // Image
+    float const   *dump_buffer_data  = (float *)gfxBufferGetData(gfx_, dump_buffer);
+    uint32_t const image_width       = dump_buffer_width;
+    uint32_t const image_height      = dump_buffer_height;
+    uint32_t const image_pixel_count = dump_buffer_width * dump_buffer_height;
+
+    std::vector<unsigned char> image_data;
+    image_data.resize((size_t)image_width * image_height * 3);
+
+    for (size_t pixel_index = 0; pixel_index < image_pixel_count; ++pixel_index)
+    {
+        auto quantize = [dump_buffer_data, pixel_index](uint32_t channel_offset) {
+            return (unsigned char)glm::floor(
+                glm::clamp(dump_buffer_data[4 * pixel_index + channel_offset], 0.f, 1.f) * 255.f);
+        };
+
+        image_data[3 * pixel_index + 0] = quantize(0);
+        image_data[3 * pixel_index + 1] = quantize(1);
+        image_data[3 * pixel_index + 2] = quantize(2);
+    }
+
+    int ret = stbi_write_png(png_file_path, image_width, image_height, 3, image_data.data(), image_width * 3);
+    if (ret == 0)
+    {
+        GFX_PRINT_ERROR(kGfxResult_InternalError, "Can't save '%s'", png_file_path);
+    }
+}
 // clang-format off
 
 void CapsaicinInternal::dumpCamera(char const *json_file_path, CameraMatrices const &camera_matrices, float camera_jitter_x, float camera_jitter_y)

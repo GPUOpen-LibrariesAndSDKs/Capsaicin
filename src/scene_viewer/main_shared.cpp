@@ -1412,6 +1412,7 @@ bool CapsaicinMain::renderGUIDetails() noexcept
         }
         ImGui::SameLine();
         ImGui::Checkbox("Save as JPEG", &saveAsJPEG);
+        ImGui::Checkbox("Save as PNG", &saveAsPNG);
     }
     return true;
 }
@@ -1443,6 +1444,10 @@ void CapsaicinMain::saveFrame() noexcept
     {
         savePath += ".jpeg"sv;
     }
+    else if (saveAsPNG)
+    {
+        savePath += ".png"sv;
+    }
     else
     {
         savePath += ".exr"sv;
@@ -1457,7 +1462,7 @@ void CapsaicinMain::saveFrame() noexcept
     Capsaicin::DumpAOVBuffer(savePath.c_str(), aov);
 
     // Disable performing tone mapping as we output in HDR
-    if (!saveAsJPEG && Capsaicin::hasOption<bool>("tonemap_enable"))
+    if (!saveAsJPEG && !saveAsPNG && Capsaicin::hasOption<bool>("tonemap_enable"))
     {
         reenableToneMap = Capsaicin::getOption<bool>("tonemap_enable");
         Capsaicin::setOption("tonemap_enable", false);

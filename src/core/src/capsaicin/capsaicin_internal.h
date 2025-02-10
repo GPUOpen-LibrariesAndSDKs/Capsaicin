@@ -631,6 +631,8 @@ private:
         char const *exr_file_path);
     void saveJPG(GfxBuffer dump_buffer, uint32_t dump_buffer_width, uint32_t dump_buffer_height,
         char const *jpg_file_path);
+    void savePNG(GfxBuffer dump_buffer, uint32_t dump_buffer_width,
+        uint32_t dump_buffer_height, char const *png_file_path);
     void dumpCamera(char const *file_path, CameraMatrices const &camera_matrices, float camera_jitter_x,
         float camera_jitter_y);
 

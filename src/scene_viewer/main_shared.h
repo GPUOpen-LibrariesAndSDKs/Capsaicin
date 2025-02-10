@@ -178,6 +178,7 @@ protected:
                                                         benchmark mode (default is just the last frame) */
     std::string benchmarkModeSuffix;                 /**< String appended to any saved files */
     bool        saveAsJPEG = false;                  /**< File type selector for dump frame */
+    bool        saveAsPNG  = false;
     bool reenableToneMap   = false; /**< Used to re-enable Tonemapping after a frame has been saved to disk */
     bool reDisableRender   = false; /**< Use to render only a single frame at a time */
 
