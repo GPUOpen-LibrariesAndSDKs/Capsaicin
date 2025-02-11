@@ -1466,7 +1466,7 @@ void CapsaicinMain::saveFrame() noexcept
     Capsaicin::DumpAOVBuffer(savePath.c_str(), aov);
 
     // Disable performing tone mapping as we output in HDR
-    if (!saveAsJPEG && !saveAsPNG && Capsaicin::hasOption<bool>("tonemap_enable"))
+    if (!saveAsPNG && Capsaicin::hasOption<bool>("tonemap_enable"))
     {
         reenableToneMap = Capsaicin::getOption<bool>("tonemap_enable");
         Capsaicin::setOption("tonemap_enable", false);
@@ -1500,6 +1500,24 @@ std::string CapsaicinMain::getSaveName() const noexcept
     {
         currentEM = "None";
     }
+    
+    auto renderer = Capsaicin::GetCurrentRenderer();
+    auto view     = Capsaicin::GetCurrentDebugView();
+    // reference path tracer
+    if (renderer.ends_with('r'))
+    {
+        savePath += "ref/"s;
+
+        if (Capsaicin::getOption<bool>("reference_pt_debug_reflections"))
+        {
+            view = "Reflection";
+        }
+    }
+    else if (renderer.ends_with("1"))
+    {
+        savePath += "test/"s;
+    }
+        
 
     savePath += currentSceneName;
     savePath += '_';
@@ -1507,7 +1525,9 @@ std::string CapsaicinMain::getSaveName() const noexcept
     savePath += '_';
     savePath += Capsaicin::GetSceneCurrentCamera();
     savePath += '_';
-    savePath += Capsaicin::GetCurrentRenderer();
+    savePath += view;
+    savePath += '_';
+    savePath += renderer;
     savePath.erase(std::remove_if(savePath.begin(), savePath.end(),
                        [](unsigned char const c) { return std::isspace(c); }),
         savePath.end());

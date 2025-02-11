@@ -423,9 +423,8 @@ float sampleBRDFPDFAndEvalute(MaterialBRDF material, float3 normal, float3 viewD
     {
         reflectance = evaluateBRDF(material, dotHV, dotNH, dotNL, dotNV);
     }
-#endif
     
-#ifndef DEBUG_REFLECTIONS
+#else
     reflectance = evaluateBRDF(material, dotHV, dotNH, dotNL, dotNV);
 #endif
     
