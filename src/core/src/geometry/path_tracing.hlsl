@@ -423,7 +423,7 @@ bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratifie
     if (currentBounce == 0)
     {
         materialBRDF.F0 = float3(1, 1, 1);
-        //materialBRDF.roughnessAlpha = 0.0f;
+        materialBRDF.roughnessAlpha = 0.0f;
     }
 #endif  
     rayDirection = sampleBRDF(materialBRDF, randomStratified, normal, viewDirection, sampleReflectance, samplePDF, specularSampled);

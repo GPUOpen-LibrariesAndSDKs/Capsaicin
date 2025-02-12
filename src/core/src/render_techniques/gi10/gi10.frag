@@ -135,6 +135,7 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
     float3 specular_dominant_half_vector = normalize(view_direction + specular_dominant_direction);
     float dotHV = saturate(dot(view_direction, specular_dominant_half_vector));
     
+    
     //if (material_evaluated.roughness <= g_GlossyReflectionsConstants.high_roughness_threshold)
     //{
     //    materialBRDF.F0 = float3(1, 1, 1);
@@ -153,7 +154,7 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
     float3 directional_albedo = saturate(materialBRDF.F0 * lut.x + (1.0f - materialBRDF.F0) * lut.y);
     float3 specular = directional_albedo * (radiance_sum.xyz / max(radiance_sum.w, 1.0f));
     output.lighting = float4(emissiveMaterial.emissive + diffuse + specular, 1.0f);
-    //output.lighting = float4(diffuse, 1);
+
 #endif // DISABLE_SPECULAR_MATERIALS
     
     // DIY
