@@ -367,6 +367,8 @@ GI10::HashGridCache::HashGridCache(GI10 &gi10)
           radiance_cache_hash_buffer_uint_[HASHGRIDCACHE_VISIBILITYRAYBUFFER])
     , radiance_cache_visibility_ray_count_buffer_(
           radiance_cache_hash_buffer_uint_[HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER])
+    , radiance_cache_visibility_index_from_cell_index_buffer_(
+          radiance_cache_hash_buffer_uint_[HASHGRIDCACHE_VISIBILITYINDEXFROMCELLINDEX])
     , radiance_cache_packed_tile_count_buffer0_(
           radiance_cache_hash_buffer_uint_[HASHGRIDCACHE_PACKEDTILECOUNTBUFFER0])
     , radiance_cache_packed_tile_count_buffer1_(
@@ -579,6 +581,7 @@ void GI10::HashGridCache::ensureMemoryIsAllocated([[maybe_unused]] CapsaicinInte
         gfxDestroyBuffer(gfx_, radiance_cache_visibility_cell_buffer_);
         gfxDestroyBuffer(gfx_, radiance_cache_visibility_query_buffer_);
         gfxDestroyBuffer(gfx_, radiance_cache_visibility_ray_buffer_);
+        gfxDestroyBuffer(gfx_, radiance_cache_visibility_index_from_cell_index_buffer_);
 
         radiance_cache_update_tile_buffer_ =
             gfxCreateBuffer<uint32_t>(gfx_, GFX_MIN(max_ray_count, num_cells));
@@ -595,6 +598,11 @@ void GI10::HashGridCache::ensureMemoryIsAllocated([[maybe_unused]] CapsaicinInte
 
         radiance_cache_visibility_ray_buffer_ = gfxCreateBuffer<uint32_t>(gfx_, max_ray_count);
         radiance_cache_visibility_ray_buffer_.setName("Capsaicin_RadianceCache_VisibilityRayBuffer");
+
+        radiance_cache_visibility_index_from_cell_index_buffer_ =
+            gfxCreateBuffer<uint32_t>(gfx_, max_ray_count);
+        radiance_cache_visibility_index_from_cell_index_buffer_.setName(
+            "Capsaicin_RadianceCache_VisbilityIndexFromCellIndexBuffer");
     }
 
     debug_total_memory_size_in_bytes += radiance_cache_update_tile_buffer_.getSize();
@@ -602,6 +610,7 @@ void GI10::HashGridCache::ensureMemoryIsAllocated([[maybe_unused]] CapsaicinInte
     debug_total_memory_size_in_bytes += radiance_cache_visibility_cell_buffer_.getSize();
     debug_total_memory_size_in_bytes += radiance_cache_visibility_query_buffer_.getSize();
     debug_total_memory_size_in_bytes += radiance_cache_visibility_ray_buffer_.getSize();
+    debug_total_memory_size_in_bytes += radiance_cache_visibility_index_from_cell_index_buffer_.getSize();
 
     if (!radiance_cache_debug_free_bucket_buffer_)
     {

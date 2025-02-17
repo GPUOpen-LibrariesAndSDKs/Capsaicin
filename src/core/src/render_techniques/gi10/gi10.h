@@ -256,6 +256,7 @@ protected:
         GfxBuffer &radiance_cache_visibility_query_buffer_;
         GfxBuffer &radiance_cache_visibility_ray_buffer_;
         GfxBuffer &radiance_cache_visibility_ray_count_buffer_;
+        GfxBuffer &radiance_cache_visibility_index_from_cell_index_buffer_;
         GfxBuffer &radiance_cache_packed_tile_count_buffer0_;
         GfxBuffer &radiance_cache_packed_tile_count_buffer1_;
         GfxBuffer &radiance_cache_packed_tile_index_buffer0_;

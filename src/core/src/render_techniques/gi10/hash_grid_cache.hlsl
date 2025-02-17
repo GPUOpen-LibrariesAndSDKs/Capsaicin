@@ -77,6 +77,7 @@ RWStructuredBuffer<float4> g_HashGridCache_BuffersFloat4[] : register(space98);
 #define                    g_HashGridCache_UsedBucketCountBuffer         g_HashGridCache_BuffersUint  [HASHGRIDCACHE_USEDBUCKETBUFFER]
 #define                    g_HashGridCache_StatsBuffer                   g_HashGridCache_BuffersFloat [HASHGRIDCACHE_STATSBUFFER]
 
+#define g_HashGridCache_VisibilityIndexFromCellIndex   g_HashGridCache_BuffersUint [HASHGRIDCACHE_VISIBILITYINDEXFROMCELLINDEX]
 //!
 //! Hash-grid radiance caching common functions.
 //!

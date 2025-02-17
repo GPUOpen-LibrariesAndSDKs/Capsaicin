@@ -142,6 +142,16 @@ struct PopulateCellsPayload
     Reservoir reservoir;
 };
 
+struct PopulateCellsPayloadIndirect
+{
+    uint query_index;
+    float3 world;
+    float3 normal;
+    float3 indirect_lighting;
+    float3 direct_lighting;
+    Reservoir reservoir;
+};
+
 struct TraceReflectionsPayload
 {
     int2   full_pos;
@@ -1775,6 +1785,27 @@ void PopulateCellsHandleHit(uint did, inout PopulateCellsPayload payload, RayDes
 #endif // USE_RESAMPLING
 }
 
+void PopulateCellsHandleHit(uint did, inout PopulateCellsPayloadIndirect payload, RayDesc ray, HitInfo hit_info, float hit_distance, inout HashGridCache_Data data)
+{
+    data.eye_position = g_Eye;
+    data.hit_position = (ray.Origin + hit_distance * ray.Direction);
+    data.direction = ray.Direction;
+    data.hit_distance = hit_distance;
+
+    uint tile_index;
+    uint cell_index = HashGridCache_FindCell(data, tile_index);
+
+    if (cell_index != kGI10_InvalidId)
+    {
+       // Bump the cell's decay to the max. now that it's been 'touched'
+        uint previous_tile_decay;
+        InterlockedExchange(g_HashGridCache_DecayTileBuffer[tile_index], g_FrameIndex, previous_tile_decay);
+
+        float4 li = HashGridCache_FilteredRadiance(cell_index, false);
+        payload.indirect_lighting += (li.xyz / max(li.w, 1.0f));
+    }
+}
+
 void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayload payload, RayDesc ray)
 {
     float3       light_radiance = payload.lighting;
@@ -1794,6 +1825,11 @@ void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayload payload, RayDe
         * light_radiance * light_weight;
 }
 
+void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayloadIndirect payload, RayDesc ray)
+{
+    payload.indirect_lighting += float3(0, 0, 0);
+}
+
 void PopulateCellsTraceRayInline(uint did, inout PopulateCellsPayload payload, RayDesc ray)
 {
     ShadowRayQuery ray_query = TraceRay<ShadowRayQuery>(ray);
@@ -1808,6 +1844,20 @@ void PopulateCellsTraceRayInline(uint did, inout PopulateCellsPayload payload, R
     }
 }
 
+void PopulateCellsTraceRayInline(uint did, inout PopulateCellsPayloadIndirect payload, RayDesc ray, inout HashGridCache_Data data)
+{
+    ShadowRayQuery ray_query = TraceRay < ShadowRayQuery > (ray);
+
+    if (ray_query.CommittedStatus() == COMMITTED_NOTHING)
+    {
+        PopulateCellsHandleMiss(did, payload, ray);
+    }
+    else
+    {
+        PopulateCellsHandleHit(did, payload, ray, GetHitInfoRtInlineCommitted(ray_query), ray_query.CommittedRayT(), data);
+    }
+}
+
 void PopulateCellsTraceRayRt(uint did, inout PopulateCellsPayload payload, RayDesc ray)
 {
     TraceRay(g_Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFFu, 0, 0, 0, ray, payload);
@@ -1817,6 +1867,15 @@ void PopulateCellsTraceRay(uint did, inout PopulateCellsPayload payload, RayDesc
 {
 #if USE_INLINE_RT
     return PopulateCellsTraceRayInline(did, payload, ray);
+#else
+    return PopulateCellsTraceRayRt(did, payload, ray);
+#endif
+}
+
+void PopulateCellsTraceRay(uint did, inout PopulateCellsPayloadIndirect payload, RayDesc ray, inout HashGridCache_Data data)
+{
+#if USE_INLINE_RT
+    return PopulateCellsTraceRayInline(did, payload, ray, data);
 #else
     return PopulateCellsTraceRayRt(did, payload, ray);
 #endif
@@ -1872,11 +1931,37 @@ void PopulateCells(uint did)
     payload.normal      = normal;
     payload.lighting    = light_radiance;
     payload.reservoir   = reservoir;
+    
     PopulateCellsTraceRay(did, payload, ray_desc);
+    
+    PopulateCellsPayloadIndirect payload_indirect;
+    payload_indirect.query_index = query_index;
+    payload_indirect.world = world;
+    payload_indirect.normal = normal;
+    payload_indirect.direct_lighting = light_radiance;
+    //payload_indirect.indirect_lighting = float3(0, 0, 0); // FIXME
+    
+    
+    RayDesc indirect_ray_desc;
+    uint tile_index = g_HashGridCache_PreviousPackedTileIndexBuffer[did];
+    
+    for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; ++cell_offset)
+    {
+        uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
+        
+        indirect_ray_desc.Direction = direction; //FIXME
+        indirect_ray_desc.Origin = offsetPosition(world + g_PreViewTranslation, normal);
+        indirect_ray_desc.TMin = 0.0f;
+        indirect_ray_desc.TMax = hasLightPosition(selected_light) ? length(light_position - ray_desc.Origin) : FLT_MAX; //FIXME
 
+        HashGridCache_Data data;
+        PopulateCellsTraceRay(did, payload_indirect, indirect_ray_desc, data);
+    }
+    
     // And update the hash-grid cell payload
     uint  cell_index         = g_HashGridCache_VisibilityCellBuffer[visibility_index];
-    uint4 quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting);
+    
+    uint4 quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + payload_indirect.indirect_lighting);
 
     if (dot(payload.lighting, payload.lighting) > 0.0f)
     {
