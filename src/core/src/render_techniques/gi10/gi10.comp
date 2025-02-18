@@ -1021,7 +1021,7 @@ void PopulateScreenProbesHandleHit(uint did, inout PopulateScreenProbesPayload p
         g_HashGridCache_VisibilityBuffer[visibility_index]      = HashGridCache_PackVisibility(visibility);
         g_HashGridCache_VisibilityCellBuffer[visibility_index]  = cell_index;
         g_HashGridCache_VisibilityQueryBuffer[visibility_index] = did;
-
+        g_HashGridCache_VisibilityIndexFromCellIndex[cell_index] = visibility_index;
         // Write out bounds of visibility
         requestLightSampleLocation(data.hit_position);
 
@@ -1802,8 +1802,9 @@ void PopulateCellsHandleHit(uint did, inout PopulateCellsPayloadIndirect payload
         InterlockedExchange(g_HashGridCache_DecayTileBuffer[tile_index], g_FrameIndex, previous_tile_decay);
 
         float4 li = HashGridCache_FilteredRadiance(cell_index, false);
-        payload.indirect_lighting += (li.xyz / max(li.w, 1.0f));
+        payload.indirect_lighting = (li.xyz / max(li.w, 1.0f));
     }
+
 }
 
 void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayload payload, RayDesc ray)
@@ -1827,7 +1828,7 @@ void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayload payload, RayDe
 
 void PopulateCellsHandleMiss(uint did, inout PopulateCellsPayloadIndirect payload, RayDesc ray)
 {
-    payload.indirect_lighting += float3(0, 0, 0);
+    payload.indirect_lighting = float3(0, 0, 0);
 }
 
 void PopulateCellsTraceRayInline(uint did, inout PopulateCellsPayload payload, RayDesc ray)
@@ -1855,7 +1856,7 @@ void PopulateCellsTraceRayInline(uint did, inout PopulateCellsPayloadIndirect pa
     else
     {
         PopulateCellsHandleHit(did, payload, ray, GetHitInfoRtInlineCommitted(ray_query), ray_query.CommittedRayT(), data);
-    }
+    } 
 }
 
 void PopulateCellsTraceRayRt(uint did, inout PopulateCellsPayload payload, RayDesc ray)
@@ -1934,35 +1935,57 @@ void PopulateCells(uint did)
     
     PopulateCellsTraceRay(did, payload, ray_desc);
     
+    uint4 quantized_radiance;
+#ifdef USE_MUTUAL_SAMPLING
+
     PopulateCellsPayloadIndirect payload_indirect;
     payload_indirect.query_index = query_index;
     payload_indirect.world = world;
     payload_indirect.normal = normal;
     payload_indirect.direct_lighting = light_radiance;
-    //payload_indirect.indirect_lighting = float3(0, 0, 0); // FIXME
-    
     
     RayDesc indirect_ray_desc;
     uint tile_index = g_HashGridCache_PreviousPackedTileIndexBuffer[did];
-    
+    float3 indirect_light = float3(0, 0, 0);
     for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; ++cell_offset)
     {
+        payload_indirect.indirect_lighting = float3(0, 0, 0);
+    
         uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
+        uint vis_index = g_HashGridCache_VisibilityIndexFromCellIndex[cell_index];
+        HashGridCache_Visibility visibility2 = HashGridCache_UnpackVisibility(g_HashGridCache_VisibilityBuffer[vis_index]);
         
-        indirect_ray_desc.Direction = direction; //FIXME
+        // Reconstruct world-space position and normal
+        Instance instance2 = g_InstanceBuffer[visibility2.instance_index];
+        Mesh mesh2 = g_MeshBuffer[instance2.mesh_index + visibility2.geometry_index];
+        float3x4 transform2 = g_TransformBuffer[instance2.transform_index];
+
+        Triangle vertices2 = fetchVertices(mesh2, visibility2.primitive_index);
+
+        vertices2.v0 = transformPoint(vertices2.v0, transform2) - g_PreViewTranslation;
+        vertices2.v1 = transformPoint(vertices2.v1, transform2) - g_PreViewTranslation;
+        vertices2.v2 = transformPoint(vertices2.v2, transform2) - g_PreViewTranslation;
+        float3 world2 = interpolate(vertices2.v0, vertices2.v1, vertices2.v2, visibility2.barycentrics);
+        
+        float3 direction2 = world - world2;
+        indirect_ray_desc.Direction = direction2; //FIXME
         indirect_ray_desc.Origin = offsetPosition(world + g_PreViewTranslation, normal);
         indirect_ray_desc.TMin = 0.0f;
-        indirect_ray_desc.TMax = hasLightPosition(selected_light) ? length(light_position - ray_desc.Origin) : FLT_MAX; //FIXME
+        indirect_ray_desc.TMax = min(length(direction2), FLT_MAX); //hasLightPosition(selected_light) ? length(light_position - ray_desc.Origin) : FLT_MAX;
 
         HashGridCache_Data data;
         PopulateCellsTraceRay(did, payload_indirect, indirect_ray_desc, data);
+        indirect_light += payload_indirect.indirect_lighting;
     }
+
+    quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + indirect_light);
+#else
     
     // And update the hash-grid cell payload
-    uint  cell_index         = g_HashGridCache_VisibilityCellBuffer[visibility_index];
+    quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + payload.lighting);
+#endif
     
-    uint4 quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + payload_indirect.indirect_lighting);
-
+    uint cell_index = g_HashGridCache_VisibilityCellBuffer[visibility_index];
     if (dot(payload.lighting, payload.lighting) > 0.0f)
     {
         InterlockedAdd(g_HashGridCache_UpdateCellValueBuffer[4 * cell_index + 0], quantized_radiance.x);

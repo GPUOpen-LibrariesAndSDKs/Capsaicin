@@ -156,9 +156,7 @@ PS_OUTPUT ResolveGI10(in float4 pos : SV_Position)
     output.lighting = float4(emissiveMaterial.emissive + diffuse + specular, 1.0f);
 
 #endif // DISABLE_SPECULAR_MATERIALS
-    
-    // DIY
-    //output.lighting = g_RedTexture[did];
+
     return output;
 }
 

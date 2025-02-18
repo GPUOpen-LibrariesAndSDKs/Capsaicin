@@ -1144,6 +1144,8 @@ RenderOptionList GI10::getRenderOptions() noexcept
         RENDER_OPTION_MAKE(gi10_glossy_reflections_mark_fireflies_full_high_threshold, options_));
     newOptions.emplace(RENDER_OPTION_MAKE(gi10_glossy_reflections_cleanup_fireflies_half_radius, options_));
     newOptions.emplace(RENDER_OPTION_MAKE(gi10_glossy_reflections_cleanup_fireflies_full_radius, options_));
+
+    newOptions.emplace(RENDER_OPTION_MAKE(gi10_mutual_sampling, options_));
     return newOptions;
 }
 
@@ -1184,6 +1186,7 @@ GI10::RenderOptions GI10::convertOptions(RenderOptionList const &options) noexce
     RENDER_OPTION_GET(gi10_glossy_reflections_mark_fireflies_full_high_threshold, newOptions, options)
     RENDER_OPTION_GET(gi10_glossy_reflections_cleanup_fireflies_half_radius, newOptions, options)
     RENDER_OPTION_GET(gi10_glossy_reflections_cleanup_fireflies_full_radius, newOptions, options)
+    RENDER_OPTION_GET(gi10_mutual_sampling, newOptions, options)
     return newOptions;
 }
 
@@ -1255,6 +1258,7 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     if (!options_.gi10_use_alpha_testing) base_defines.push_back("DISABLE_ALPHA_TESTING");
     if (capsaicin.hasAOVBuffer("OcclusionAndBentNormal")) base_defines.push_back("HAS_OCCLUSION");
     if (options_.gi10_disable_specular_materials) base_defines.push_back("DISABLE_SPECULAR_MATERIALS");
+    if (options_.gi10_mutual_sampling) base_defines.push_back("USE_MUTUAL_SAMPLING");
     uint32_t const base_define_count = (uint32_t)base_defines.size();
 
     std::vector<char const *> resampling_defines = base_defines;
@@ -1272,6 +1276,7 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     }
     uint32_t const debug_hash_cells_define_count = (uint32_t)debug_hash_cells_defines.size();
 
+   
     // We need to clear the radiance cache when toggling the hash cells debug mode;
     // that is because we only populate the `packedCell' buffer when visualizing the
     // cells as this is required to recover the position & orientation of a given cell.
@@ -1480,6 +1485,7 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
         (options.gi10_use_resampling != options_.gi10_use_resampling
             || options.gi10_use_alpha_testing != options_.gi10_use_alpha_testing
             || options.gi10_disable_specular_materials != options_.gi10_disable_specular_materials
+            || options.gi10_mutual_sampling != options_.gi10_mutual_sampling
             || light_sampler->needsRecompile(capsaicin) || needs_debug_view)
         || options_.gi10_use_dxr10 != options.gi10_use_dxr10
         || options_.gi10_hash_grid_cache_debug_stats != options.gi10_hash_grid_cache_debug_stats;
@@ -2893,6 +2899,8 @@ void GI10::renderGUI(CapsaicinInternal &capsaicin) const noexcept
     ImGui::Checkbox("Disable Albedo Textures", &capsaicin.getOption<bool>("gi10_disable_albedo_textures"));
     ImGui::Checkbox(
         "Disable Specular Materials", &capsaicin.getOption<bool>("gi10_disable_specular_materials"));
+
+    ImGui::Checkbox("Use Mutual Sampling", &capsaicin.getOption<bool>("gi10_mutual_sampling"));
 
     if (ImGui::CollapsingHeader("Hash Grid Cache", ImGuiTreeNodeFlags_None))
     {

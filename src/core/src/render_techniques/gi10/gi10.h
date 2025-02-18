@@ -50,6 +50,7 @@ public:
         bool  gi10_use_direct_lighting                  = true;
         bool  gi10_disable_albedo_textures              = false;
         bool  gi10_disable_specular_materials           = false;
+        bool  gi10_mutual_sampling                      = false;
         float gi10_hash_grid_cache_cell_size            = 32.0f;
         float gi10_hash_grid_cache_min_cell_size        = 1e-1f;
         int   gi10_hash_grid_cache_tile_cell_ratio      = 8;    // 8x8               = 64
