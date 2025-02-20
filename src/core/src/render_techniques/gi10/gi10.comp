@@ -1945,44 +1945,61 @@ void PopulateCells(uint did)
     payload_indirect.direct_lighting = light_radiance;
     
     RayDesc indirect_ray_desc;
-    uint tile_index = g_HashGridCache_PreviousPackedTileIndexBuffer[did];
-    float3 indirect_light = float3(0, 0, 0);
-    for (int cell_offset = 0; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; ++cell_offset)
-    {
-        payload_indirect.indirect_lighting = float3(0, 0, 0);
     
-        uint cell_index = HashGridCache_CellIndex(cell_offset, tile_index);
-        uint vis_index = g_HashGridCache_VisibilityIndexFromCellIndex[cell_index];
-        HashGridCache_Visibility visibility2 = HashGridCache_UnpackVisibility(g_HashGridCache_VisibilityBuffer[vis_index]);
-        
-        // Reconstruct world-space position and normal
-        Instance instance2 = g_InstanceBuffer[visibility2.instance_index];
-        Mesh mesh2 = g_MeshBuffer[instance2.mesh_index + visibility2.geometry_index];
-        float3x4 transform2 = g_TransformBuffer[instance2.transform_index];
+    TriangleNormUV vertices2 = fetchVerticesNormUV(mesh, visibility.primitive_index);
+    float2 mesh_uv = interpolate(vertices2.uv0, vertices2.uv1, vertices2.uv2, visibility.barycentrics);
+    
+    Material material = g_MaterialBuffer[instance.material_index];
+    MaterialEvaluated materialEvaluated = MakeMaterialEvaluated(material, mesh_uv);
+    MaterialBRDF materialBRDF = MakeMaterialBRDF(materialEvaluated);
+    
+    float3 direction2;
+    float3 view_direction = normalize(g_Eye - world);
+    float3 shading_normal = normal; // FIXME
+    
+    // Transform the view direction into the surfaces tangent coordinate space (oriented so that z axis is aligned to normal)
+    Quaternion localRotation = QuaternionRotationZ(normal);
+    float3 localView = localRotation.transform(view_direction);
 
-        Triangle vertices2 = fetchVertices(mesh2, visibility2.primitive_index);
+    Random randomNG = MakeRandom(did, g_FrameIndex);
+    float2 samples = randomNG.rand2();
 
-        vertices2.v0 = transformPoint(vertices2.v0, transform2) - g_PreViewTranslation;
-        vertices2.v1 = transformPoint(vertices2.v1, transform2) - g_PreViewTranslation;
-        vertices2.v2 = transformPoint(vertices2.v2, transform2) - g_PreViewTranslation;
-        float3 world2 = interpolate(vertices2.v0, vertices2.v1, vertices2.v2, visibility2.barycentrics);
-        
-        float3 direction2 = world - world2;
-        indirect_ray_desc.Direction = direction2; //FIXME
-        indirect_ray_desc.Origin = offsetPosition(world + g_PreViewTranslation, normal);
-        indirect_ray_desc.TMin = 0.0f;
-        indirect_ray_desc.TMax = min(length(direction2), FLT_MAX); //hasLightPosition(selected_light) ? length(light_position - ray_desc.Origin) : FLT_MAX;
+    // calculate diffuse, specular layer probability
+    float3 specularLightDirection = calculateGGXSpecularDirection(shading_normal, view_direction, sqrt(materialBRDF.roughnessAlpha));
+    float3 specularHalfVector = normalize(view_direction + specularLightDirection);
+    float specularDotHV = saturate(dot(specularHalfVector, view_direction));
+    float probabilityBRDF = calculateBRDFProbability(materialBRDF.F0, specularDotHV, materialBRDF.albedo);
 
-        HashGridCache_Data data;
-        PopulateCellsTraceRay(did, payload_indirect, indirect_ray_desc, data);
-        indirect_light += payload_indirect.indirect_lighting;
+    // specular layer case
+    if (randomNG.rand() < probabilityBRDF)
+    {
+        // sample direction by BRDF importance sampling
+        float3 newLight = sampleGGX(materialBRDF.roughnessAlpha, localView, samples);
+        direction2 = normalize(localRotation.inverse().transform(newLight));
     }
+    else
+    {
+        float3 newLight = sampleHemisphere(samples);
+        direction2 = normalize(localRotation.inverse().transform(newLight));
 
-    quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + indirect_light);
+    }
+    indirect_ray_desc.Direction = direction2;
+    indirect_ray_desc.Origin = offsetPosition(world + g_PreViewTranslation, normal);
+    indirect_ray_desc.TMin = 0.0f;
+    indirect_ray_desc.TMax = min(length(direction2), FLT_MAX);
+
+    HashGridCache_Data data;
+    PopulateCellsTraceRay(did, payload_indirect, indirect_ray_desc, data);
+    
+    float3 indirect_light = float3(0, 0, 0);
+    indirect_light = payload_indirect.indirect_lighting;
+ 
+    quantized_radiance = HashGridCache_QuantizeRadiance((payload.lighting + indirect_light));
 #else
+
     
     // And update the hash-grid cell payload
-    quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting + payload.lighting);
+    quantized_radiance = HashGridCache_QuantizeRadiance(payload.lighting);
 #endif
     
     uint cell_index = g_HashGridCache_VisibilityCellBuffer[visibility_index];
