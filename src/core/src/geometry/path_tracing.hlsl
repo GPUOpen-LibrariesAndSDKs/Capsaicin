@@ -413,7 +413,7 @@ bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratifie
 #endif
 )
 {
-    // Sample BRDF to get next ray direction
+
 #ifndef ENABLE_NEE_RESERVOIR_SAMPLING
     float3 sampleReflectance;
 #endif
