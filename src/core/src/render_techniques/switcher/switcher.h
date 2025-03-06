@@ -24,16 +24,13 @@ THE SOFTWARE.
 #include "capsaicin_internal.h"
 #include "render_technique.h"
 
-#include <array>
 #include <iterator>
 
 namespace Capsaicin
 {
 template<typename T1, typename T2>
-
 requires std::is_base_of_v<RenderTechnique, T1> && std::is_base_of_v<RenderTechnique, T2>
-
-class Switcher : public RenderTechnique
+class Switcher final : public RenderTechnique
 {
 protected:
     struct RenderOptions
@@ -46,9 +43,9 @@ protected:
     RenderOptions options;
 
 private:
-    static constexpr auto name     = toStaticString("Mixer") + toStaticString<T1>() + toStaticString<T2>();
-    static constexpr auto variable = toStaticString("mixer_") + toStaticString<T1>().lower()
-                                   + toStaticString("_") + toStaticString<T2>().lower();
+    static constexpr auto name = toStaticString("Mixer") + toStaticString<T1>() + toStaticString<T2>();
+    static constexpr auto variable =
+        toStaticString("mixer_") + toStaticString<T1>().lower() + '_' + toStaticString<T2>().lower();
 
 public:
     /** Default constructor */
@@ -57,7 +54,12 @@ public:
     {}
 
     /** Defaulted destructor */
-    ~Switcher() { terminate(); }
+    ~Switcher() override { terminate(); }
+
+    Switcher(Switcher const &other)                = delete;
+    Switcher(Switcher &&other) noexcept            = delete;
+    Switcher &operator=(Switcher const &other)     = delete;
+    Switcher &operator=(Switcher &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -67,20 +69,21 @@ public:
     {
         auto ret = technique1.getRenderOptions();
         std::ranges::move(technique2.getRenderOptions(), std::inserter(ret, ret.end()));
-        ret.emplace(static_cast<std::string_view>(variable), oldOptions.mixer_use_second_technique);
+        ret.emplace(static_cast<std::string_view>(variable), options.mixer_use_second_technique);
         return ret;
     }
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept
     {
         RenderOptions newOptions;
-        newOptions.mixer_use_second_technique = *std::get_if<decltype(options.mixer_use_second_technique)>(
-            &settings.options_.at(static_cast<std::string_view>(variable)));
+        newOptions.mixer_use_second_technique =
+            *std::get_if<decltype(RenderOptions::mixer_use_second_technique)>(
+                &options.at(static_cast<std::string_view>(variable)));
         return newOptions;
     }
 
@@ -88,7 +91,7 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override
+    [[nodiscard]] ComponentList getComponents() const noexcept override
     {
         auto ret = technique1.getComponents();
         std::ranges::move(technique2.getComponents(), std::back_inserter(ret));
@@ -99,21 +102,21 @@ public:
      * Gets a list of any shared buffers provided by the current render technique.
      * @return A list of all supported buffers.
      */
-    BufferList getBuffers() const noexcept override
+    [[nodiscard]] SharedBufferList getSharedBuffers() const noexcept override
     {
-        auto ret = technique1.getBuffers();
-        std::ranges::move(technique2.getBuffers(), std::back_inserter(ret));
+        auto ret = technique1.getSharedBuffers();
+        std::ranges::move(technique2.getSharedBuffers(), std::back_inserter(ret));
         return ret;
     }
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    AOVList getAOVs() const noexcept override
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override
     {
-        auto ret = technique1.getAOVs();
-        std::ranges::move(technique2.getAOVs(), std::back_inserter(ret));
+        auto ret = technique1.getSharedTextures();
+        std::ranges::move(technique2.getSharedTextures(), std::back_inserter(ret));
         return ret;
     }
 
@@ -121,7 +124,7 @@ public:
      * Gets a list of any debug views provided by the current render technique.
      * @return A list of all supported debug views.
      */
-    DebugViewList getDebugViews() const noexcept override
+    [[nodiscard]] DebugViewList getDebugViews() const noexcept override
     {
         auto ret = technique1.getDebugViews();
         std::ranges::move(technique2.getDebugViews(), std::back_inserter(ret));
@@ -196,11 +199,11 @@ public:
 
     /**
      * Gets number of timestamp queries.
-     * @returns The timestamp query count.
+     * @return The timestamp query count.
      */
-    uint32_t getTimestampQueryCount() const noexcept override
+    [[nodiscard]] uint32_t getTimestampQueryCount() const noexcept override
     {
-        if (!oldOptions.mixer_use_second_technique)
+        if (!options.mixer_use_second_technique)
         {
             return technique1.getTimestampQueryCount();
         }
@@ -212,11 +215,11 @@ public:
 
     /**
      * Gets timestamp queries.
-     * @returns The timestamp queries.
+     * @return The timestamp queries.
      */
-    TimestampQuery const *getTimestampQueries() const noexcept override
+    [[nodiscard]] std::vector<TimestampQuery> const &getTimestampQueries() const noexcept override
     {
-        if (!oldOptions.mixer_use_second_technique)
+        if (!options.mixer_use_second_technique)
         {
             return technique1.getTimestampQueries();
         }
@@ -242,7 +245,5 @@ public:
         technique1.setGfxContext(gfx);
         technique2.setGfxContext(gfx);
     }
-
-protected:
 };
 } // namespace Capsaicin

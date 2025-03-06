@@ -23,19 +23,7 @@ THE SOFTWARE.
 
 #include "capsaicin_internal.h"
 
-#define _USE_MATH_DEFINES
-#include "math.h"
-
-namespace
-{
-glm::vec3 const forward_vectors[] = {glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f),
-    glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f),
-    glm::vec3(0.0f, 0.0f, 1.0f)};
-
-glm::vec3 const up_vectors[] = {glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f),
-    glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f),
-    glm::vec3(0.0f, -1.0f, 0.0f)};
-} // namespace
+#include <numbers>
 
 namespace Capsaicin
 {
@@ -64,8 +52,7 @@ Atmosphere::RenderOptions Atmosphere::convertOptions(RenderOptionList const &opt
 
 bool Atmosphere::init(CapsaicinInternal const &capsaicin) noexcept
 {
-    atmosphere_program_ =
-        gfxCreateProgram(gfx_, "render_techniques/atmosphere/atmosphere", capsaicin.getShaderPath());
+    atmosphere_program_       = capsaicin.createProgram("render_techniques/atmosphere/atmosphere");
     draw_atmosphere_kernel_   = gfxCreateComputeKernel(gfx_, atmosphere_program_, "DrawAtmosphere");
     filter_atmosphere_kernel_ = gfxCreateComputeKernel(gfx_, atmosphere_program_, "FilterAtmosphere");
     return !!atmosphere_program_;
@@ -74,15 +61,18 @@ bool Atmosphere::init(CapsaicinInternal const &capsaicin) noexcept
 void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
 {
     options = convertOptions(capsaicin.getOptions());
-    if (!options.atmosphere_enable) return;
+    if (!options.atmosphere_enable)
+    {
+        return;
+    }
 
-    GfxTexture environment_buffer = capsaicin.getEnvironmentBuffer();
+    GfxTexture const environment_buffer = capsaicin.getEnvironmentBuffer();
     if (!environment_buffer)
     {
         return; // no environment buffer was created
     }
 
-    uint32_t const buffer_dimensions[] = {environment_buffer.getWidth(), environment_buffer.getHeight()};
+    auto const buffer_dimensions = uint2 {environment_buffer.getWidth(), environment_buffer.getHeight()};
 
     gfxProgramSetParameter(gfx_, atmosphere_program_, "g_Eye", capsaicin.getCamera().eye);
     gfxProgramSetParameter(gfx_, atmosphere_program_, "g_FrameIndex", capsaicin.getFrameIndex());
@@ -95,17 +85,25 @@ void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
         TimedSection const timed_section(*this, "DrawAtmosphere");
 
         uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, draw_atmosphere_kernel_);
-        uint32_t const  num_groups_x = (buffer_dimensions[0] + num_threads[0] - 1) / num_threads[0];
-        uint32_t const  num_groups_y = (buffer_dimensions[1] + num_threads[1] - 1) / num_threads[1];
+        uint32_t const  num_groups_x = (buffer_dimensions.x + num_threads[0] - 1) / num_threads[0];
+        uint32_t const  num_groups_y = (buffer_dimensions.y + num_threads[1] - 1) / num_threads[1];
 
         gfxCommandBindKernel(gfx_, draw_atmosphere_kernel_);
+
+        constexpr std::array forward_vectors = {glm::vec3(-1.0F, 0.0F, 0.0F), glm::vec3(1.0F, 0.0F, 0.0F),
+            glm::vec3(0.0F, 1.0F, 0.0F), glm::vec3(0.0F, -1.0F, 0.0F), glm::vec3(0.0F, 0.0F, -1.0F),
+            glm::vec3(0.0F, 0.0F, 1.0F)};
+
+        constexpr std::array up_vectors = {glm::vec3(0.0F, -1.0F, 0.0F), glm::vec3(0.0F, -1.0F, 0.0F),
+            glm::vec3(0.0F, 0.0F, -1.0F), glm::vec3(0.0F, 0.0F, 1.0F), glm::vec3(0.0F, -1.0F, 0.0F),
+            glm::vec3(0.0F, -1.0F, 0.0F)};
 
         for (uint32_t face_index = 0; face_index < environment_buffer.getDepth(); ++face_index)
         {
             glm::mat4 const view =
-                glm::lookAt(glm::vec3(0.0f), forward_vectors[face_index], up_vectors[face_index]);
-            glm::mat4 const proj          = glm::perspective((float)M_PI / 2.0f, 1.0f, 0.1f, 1e4f);
-            glm::mat4 const view_proj_inv = glm::inverse(proj * view);
+                lookAt(glm::vec3(0.0F), forward_vectors[face_index], up_vectors[face_index]);
+            glm::mat4 const proj = glm::perspective(std::numbers::pi_v<float> / 2.0F, 1.0F, 0.1F, 1e4F);
+            glm::mat4 const view_proj_inv = inverse(proj * view);
 
             gfxProgramSetParameter(gfx_, atmosphere_program_, "g_FaceIndex", face_index);
             gfxProgramSetParameter(gfx_, atmosphere_program_, "g_ViewProjectionInverse", view_proj_inv);
@@ -122,8 +120,8 @@ void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
 
         gfxCommandBindKernel(gfx_, filter_atmosphere_kernel_);
 
-        uint32_t buffer_width  = buffer_dimensions[0];
-        uint32_t buffer_height = buffer_dimensions[1];
+        uint32_t buffer_width  = buffer_dimensions.x;
+        uint32_t buffer_height = buffer_dimensions.y;
 
         for (uint32_t mip_level = 1; mip_level < environment_buffer.getMipLevels(); ++mip_level)
         {
@@ -135,8 +133,8 @@ void Atmosphere::render(CapsaicinInternal &capsaicin) noexcept
             gfxProgramSetParameter(
                 gfx_, atmosphere_program_, "g_OutEnvironmentBuffer", environment_buffer, mip_level);
 
-            buffer_width  = GFX_MAX(buffer_width >> 1, 1u);
-            buffer_height = GFX_MAX(buffer_height >> 1, 1u);
+            buffer_width  = GFX_MAX(buffer_width >> 1, 1U);
+            buffer_height = GFX_MAX(buffer_height >> 1, 1U);
 
             uint32_t const num_groups_x = (buffer_width + num_threads[0] - 1) / num_threads[0];
             uint32_t const num_groups_y = (buffer_height + num_threads[1] - 1) / num_threads[1];

@@ -25,13 +25,13 @@ THE SOFTWARE.
 
 #include "path_tracing_shared.h"
 
-#include "../components/stratified_sampler/stratified_sampler.hlsl"
-#include "../geometry/intersection.hlsl"
-#include "../geometry/mis.hlsl"
-#include "../geometry/ray_intersection.hlsl"
-#include "../materials/material_sampling.hlsl"
-#include "../math/transform.hlsl"
-#include "../math/random.hlsl"
+#include "components/stratified_sampler/stratified_sampler.hlsl"
+#include "geometry/intersection.hlsl"
+#include "geometry/mis.hlsl"
+#include "geometry/ray_intersection.hlsl"
+#include "materials/material_sampling.hlsl"
+#include "math/transform.hlsl"
+#include "math/random.hlsl"
 
 #ifndef USE_INLINE_RT
 #define USE_INLINE_RT 1
@@ -63,9 +63,6 @@ struct PathData
     pathPayload radiance; /**< Accumulated radiance for the current path segment */
     float samplePDF;    /**< The PDF of the last sampled BRDF */
     float3 normal;      /**< The surface normal at the location the current path originated from */
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    float3 sampleReflectance;  /**< The evaluated material at the point at the start of the path */
-#endif
     uint bounce;        /**< Bounce depth of current path segment */
     float3 origin;      /**< Return value for new path segment start location */
     float3 direction;   /**< Return value for new path segment direction */
@@ -83,11 +80,7 @@ struct PathData
  * @param [in,out] radiance The combined radiance. Any new radiance is added to the existing value and returned.
  */
 void shadePathMiss(RayDesc ray, uint currentBounce, inout LightSampler lightSampler, float3 normal, float samplePDF,
-    float3 throughput,
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    float3 sampleReflectance,
-#endif
-    inout float3 radiance)
+    float3 throughput, inout float3 radiance)
 {
 #if !defined(DISABLE_NON_NEE) && !defined(DISABLE_ENVIRONMENT_LIGHTS)
 #   ifdef DISABLE_DIRECT_LIGHTING
@@ -103,12 +96,8 @@ void shadePathMiss(RayDesc ray, uint currentBounce, inout LightSampler lightSamp
             // Add lighting contribution
 #   ifndef DISABLE_NEE
             // Account for light contribution along sampled direction
-            float lightPDF = sampleEnvironmentLightPDF(light, ray.Direction, float3(0.0f.xxx));
+            float lightPDF = sampleEnvironmentLightPDF(light, ray.Direction, normal);
             lightPDF *= lightSampler.sampleLightPDF(0, ray.Origin, normal);
-#       ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-            float weight = luminance(sampleReflectance * lightRadiance); // This must match Reservoir_EvaluateTargetPdf
-            lightPDF = (weight != 0.0f)? lightPDF / weight : 0.0f;
-#       endif
             if (lightPDF != 0.0f)
             {
                 float weight = heuristicMIS(samplePDF, lightPDF);
@@ -139,11 +128,7 @@ void shadePathMiss(RayDesc ray, uint currentBounce, inout LightSampler lightSamp
  * @param [in,out] radiance The combined radiance. Any new radiance is added to the existing value and returned.
  */
 void shadePathHit(RayDesc ray, HitInfo hitData, IntersectData iData, inout LightSampler lightSampler,
-    uint currentBounce, float3 normal, float samplePDF, float3 throughput,
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    float3 sampleReflectance,
-#endif
-    inout float3 radiance)
+    uint currentBounce, float3 normal, float samplePDF, float3 throughput, inout float3 radiance)
 {
 #if !defined(DISABLE_NON_NEE) && !defined(DISABLE_AREA_LIGHTS)
 #   ifdef DISABLE_DIRECT_LIGHTING
@@ -151,27 +136,20 @@ void shadePathHit(RayDesc ray, HitInfo hitData, IntersectData iData, inout Light
 #   endif // DISABLE_DIRECT_LIGHTING
 
     // Get material emissive values
-    MaterialEmissive materialEmissive = MakeMaterialEmissive(iData.material, iData.uv);
-    if (any(materialEmissive.emissive > 0.0f))
+    if (any(iData.material.emissivity.xyz > 0.0f))
     {
+        // Get material properties at intersection
+        float4 areaEmissivity = emissiveAlphaScaled(iData.material, iData.uv);
         // Get light contribution
-        float3 lightRadiance = materialEmissive.emissive;
+        LightArea emissiveLight = MakeLightArea(iData.vertex0, iData.vertex1, iData.vertex2,
+            areaEmissivity, iData.uv, iData.uv, iData.uv);
+        float3 lightRadiance = evaluateAreaLight(emissiveLight, 0.0f.xx/*Use bogus barycentrics as correct UV is already stored*/);
         if (currentBounce != 0)
         {
             // Account for light contribution along sampled direction
 #   ifndef DISABLE_NEE
-            // Get material properties at intersection
-            LightArea emissiveLight = MakeLightArea(iData.vertex0, iData.vertex1, iData.vertex2,
-                // The following parameters are irrelevant for calculating PDF
-                0.0f.xxxx, 0.0f, 0.0f, 0.0f);
-
             float lightPDF = sampleAreaLightPDF(emissiveLight, ray.Origin, iData.position);
             lightPDF *= lightSampler.sampleLightPDF(getAreaLightIndex(hitData.instanceIndex, hitData.primitiveIndex), ray.Origin, normal);
-#   ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-            float3 newRadiance = evaluateAreaLight(emissiveLight, iData.barycentrics);
-            float weight = luminance(sampleReflectance * newRadiance); // This must match Reservoir_EvaluateTargetPdf
-            lightPDF = (weight != 0.0f)? lightPDF / weight : 0.0f;
-#   endif
             if (lightPDF != 0.0f)
             {
                 float weight = heuristicMIS(samplePDF, lightPDF);
@@ -193,7 +171,7 @@ void shadePathHit(RayDesc ray, HitInfo hitData, IntersectData iData, inout Light
 }
 
 /**
- * Calculate any radiance from a hit path segment.
+ * Calculate any radiance from a hit light.
  * @param ray               The traced ray that hit a surface.
  * @param material          Material data describing BRDF of surface.
  * @param normal            Shading normal vector at current position.
@@ -226,30 +204,23 @@ void shadeLightHit(RayDesc ray, MaterialBRDF material, float3 normal, float3 vie
 /**
  * Calculates a new light ray direction from a surface by sampling the scenes lighting.
  * @tparam RNG The type of random number sampler to be used.
- * @param material         Material data describing BRDF of surface.
- * @param randomStratified Random number sampler used to sample light.
- * @param lightSampler     Light sampler.
- * @param position         Current position on surface.
- * @param normal           Shading normal vector at current position.
- * @param geometryNormal   Surface normal vector at current position.
- * @param viewDirection    Outgoing ray view direction.
- * @param ray              (Out) The ray containing the new light ray parameters.
- * @param lightPDF         (Out) The PDF of sampling the returned light direction.
- * @param radianceLi       (Out) The radiance visible along sampled light.
- * @param selectedLight    (Out) The light that was selected for sampling.
+ * @param material            Material data describing BRDF of surface.
+ * @param randomStratified    Random number sampler used to sample light.
+ * @param lightSampler        Light sampler.
+ * @param position            Current position on surface.
+ * @param normal              Shading normal vector at current position.
+ * @param geometryNormal      Surface normal vector at current position.
+ * @param viewDirection       Outgoing ray view direction.
+ * @param [out] ray           The ray containing the new light ray parameters (may not be normalised).
+ * @param [out] lightPDF      The PDF of sampling the returned light direction.
+ * @param [out] radianceLi    The radiance visible along sampled light.
+ * @param [out] selectedLight The light that was selected for sampling.
  * @return True if light path was generated, False if no ray returned.
  */
 bool sampleLightsNEEDirection(MaterialBRDF material, inout StratifiedSampler randomStratified, LightSampler lightSampler,
     float3 position, float3 normal, float3 geometryNormal, float3 viewDirection, out RayDesc ray, out float lightPDF, out float3 radianceLi, out Light selectedLight)
 {
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    Reservoir res = lightSampler.sampleLightList<8>(position, normal, viewDirection, material);
-    uint lightIndex = res.lightSample.index;
-    lightPDF = (res.W != 0.0f) ? rcp(res.W) : 0.0f; // Need to invert so it can be used in MIS
-#else
     uint lightIndex = lightSampler.sampleLights(position, normal, lightPDF);
-#endif
-
     if (lightPDF == 0.0f)
     {
         return false;
@@ -259,16 +230,12 @@ bool sampleLightsNEEDirection(MaterialBRDF material, inout StratifiedSampler ran
     float3 lightPosition;
     float3 lightDirection;
     selectedLight = getLight(lightIndex);
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    radianceLi = evaluateLightSampled(selectedLight, position, res.lightSample.sampleParams, lightDirection, lightPosition);
-#else
     float sampledLightPDF;
     float2 unused;
     radianceLi = sampleLight(selectedLight, randomStratified, position, normal, lightDirection, sampledLightPDF, lightPosition, unused);
 
     // Combine PDFs
     lightPDF *= sampledLightPDF;
-#endif
 
     // Early discard lights behind surface
     if (dot(lightDirection, geometryNormal) < 0.0f || dot(lightDirection, normal) < 0.0f || lightPDF == 0.0f)
@@ -277,10 +244,10 @@ bool sampleLightsNEEDirection(MaterialBRDF material, inout StratifiedSampler ran
     }
 
     // Create shadow ray
-    ray.Origin = position;
-    ray.Direction = lightDirection;
+    ray.Origin = offsetPosition(position, geometryNormal);
+    ray.Direction = hasLightPosition(selectedLight) ? lightPosition - ray.Origin : lightDirection;
     ray.TMin = 0.0f;
-    ray.TMax = hasLightPosition(selectedLight) ? length(lightPosition - position) : FLT_MAX;
+    ray.TMax = hasLightPosition(selectedLight) ? 1.0f - SHADOW_RAY_EPSILON : FLT_MAX;
     return true;
 }
 
@@ -323,6 +290,10 @@ void sampleLightsNEE(MaterialBRDF material, inout StratifiedSampler randomStrati
     // If nothing was hit then we have hit the light
     if (hit)
     {
+        // Normalise ray direction
+        ray.Direction = normalize(ray.Direction);
+        ray.TMax = FLT_MAX;
+
         // Add lighting contribution
 #ifdef USE_CUSTOM_HIT_FUNCTIONS
         shadeLightHitCustom(ray, material, normal, viewDirection, throughput, lightPDF, radianceLi, selectedLight, radiance);
@@ -350,16 +321,10 @@ void sampleLightsNEE(MaterialBRDF material, inout StratifiedSampler randomStrati
  */
 bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratified,
     inout LightSampler lightSampler, uint currentBounce, uint minBounces, uint maxBounces, float3 normal,
-    float3 geometryNormal, float3 viewDirection, inout float3 throughput, out float3 rayDirection, out float samplePDF
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    , out float3 sampleReflectance
-#endif
-)
+    float3 geometryNormal, float3 viewDirection, inout float3 throughput, out float3 rayDirection, out float samplePDF)
 {
     // Sample BRDF to get next ray direction
-#ifndef ENABLE_NEE_RESERVOIR_SAMPLING
     float3 sampleReflectance;
-#endif
     rayDirection = sampleBRDF(materialBRDF, randomStratified, normal, viewDirection, sampleReflectance, samplePDF);
 
     // Prevent tracing directions below the surface
@@ -402,22 +367,14 @@ bool pathNext(MaterialBRDF materialBRDF, inout StratifiedSampler randomStratifie
  */
 bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout StratifiedSampler randomStratified,
     inout LightSampler lightSampler, uint currentBounce, uint minBounces, uint maxBounces, inout float3 normal,
-    inout float samplePDF, inout float3 throughput,
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    inout float3 sampleReflectance,
-#endif
-    inout pathPayload radiance)
+    inout float samplePDF, inout float3 throughput, inout pathPayload radiance)
 {
     // Shade current position
 #ifdef USE_CUSTOM_HIT_FUNCTIONS
-    shadePathHitCustom(ray, hitData, iData, lightSampler, currentBounce, normal, samplePDF, throughput,
+    shadePathHitCustom(ray, hitData, iData, lightSampler, currentBounce, normal, samplePDF, throughput, radiance);
 #else
-    shadePathHit(ray, hitData, iData, lightSampler, currentBounce, normal, samplePDF, throughput,
+    shadePathHit(ray, hitData, iData, lightSampler, currentBounce, normal, samplePDF, throughput, radiance);
 #endif
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-        sampleReflectance,
-#endif
-        radiance);
 
     // Terminate early if no more bounces
     if (currentBounce == maxBounces)
@@ -432,9 +389,6 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
     //{
     //    return false;
     //}
-
-    // Offset the intersection position to prevent self intersection on generated rays
-    float3 offsetOrigin = offsetPosition(iData.position, iData.geometryNormal);
 
     MaterialBRDF materialBRDF = MakeMaterialBRDF(iData.material, iData.uv);
 #ifdef DISABLE_ALBEDO_MATERIAL
@@ -455,7 +409,7 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
 #   endif // DISABLE_DIRECT_LIGHTING
     {
         // Sample a single light
-        sampleLightsNEE(materialBRDF, randomStratified, lightSampler, offsetOrigin,
+        sampleLightsNEE(materialBRDF, randomStratified, lightSampler, iData.position,
             iData.normal, iData.geometryNormal, viewDirection, throughput, radiance);
     }
 #endif // DISABLE_NEE
@@ -463,14 +417,10 @@ bool pathHit(inout RayDesc ray, HitInfo hitData, IntersectData iData, inout Stra
     // Sample BRDF to get next ray direction
     float3 rayDirection;
     bool ret = pathNext(materialBRDF, randomStratified, lightSampler, currentBounce, minBounces, maxBounces,
-        iData.normal, iData.geometryNormal, viewDirection, throughput, rayDirection, samplePDF
-#ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-        , sampleReflectance
-#endif
-    );
+        iData.normal, iData.geometryNormal, viewDirection, throughput, rayDirection, samplePDF);
 
     // Update path information
-    ray.Origin = offsetOrigin;
+    ray.Origin = offsetPosition(iData.position, iData.geometryNormal);
     ray.Direction = rayDirection;
     ray.TMin = 0.0f;
     ray.TMax = FLT_MAX;
@@ -496,9 +446,6 @@ void tracePath(RayDesc ray, inout StratifiedSampler randomStratified, inout Ligh
     // Initialise per-sample path tracing values
 #if USE_INLINE_RT
     float samplePDF = 1.0f; // The PDF of the last sampled BRDF
-#   ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-    float3 sampleReflectance = 0.0f;
-#   endif
 #else
     PathData pathData;
     pathData.radiance = radiance;
@@ -519,14 +466,10 @@ void tracePath(RayDesc ray, inout StratifiedSampler randomStratified, inout Ligh
         if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
         {
 #   ifdef USE_CUSTOM_HIT_FUNCTIONS
-            shadePathMissCustom(ray, bounce, lightSampler, normal, samplePDF, throughput
+            shadePathMissCustom(ray, bounce, lightSampler, normal, samplePDF, throughput, radiance);
 #   else
-            shadePathMiss(ray, bounce, lightSampler, normal, samplePDF, throughput
+            shadePathMiss(ray, bounce, lightSampler, normal, samplePDF, throughput, radiance);
 #   endif
-#   ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-                , sampleReflectance
-#   endif
-                , radiance);
             break;
         }
         else
@@ -535,11 +478,7 @@ void tracePath(RayDesc ray, inout StratifiedSampler randomStratified, inout Ligh
             HitInfo hitData = GetHitInfoRtInlineCommitted(rayQuery);
             IntersectData iData = MakeIntersectData(hitData);
             if (!pathHit(ray, hitData, iData, randomStratified, lightSampler,
-                bounce, minBounces, maxBounces, normal, samplePDF, throughput
-#   ifdef ENABLE_NEE_RESERVOIR_SAMPLING
-                , sampleReflectance
-#   endif
-                , radiance))
+                bounce, minBounces, maxBounces, normal, samplePDF, throughput, radiance))
             {
                 break;
             }

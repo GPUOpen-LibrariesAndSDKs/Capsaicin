@@ -22,8 +22,7 @@ THE SOFTWARE.
 
 #include "ssgi_shared.h"
 
-float2 g_NearFar;    //
-float4 g_InvDeviceZ; //
+float2 g_NearFar;
 
 ConstantBuffer<SSGIConstants> g_SSGIConstants;
 Texture2D<float> g_DepthBuffer;
@@ -59,9 +58,10 @@ SamplerState g_PointSampler;
 //! Shader includes.
 //!
 
-#include "../../math/math_constants.hlsl"
-#include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"
-#include "../../render_techniques/gi10/gi10.hlsl"
+#include "math/math_constants.hlsl"
+#include "components/blue_noise_sampler/blue_noise_sampler.hlsl"
+#include "math/transform.hlsl"
+#include "math/math_constants.hlsl"
 
 //!
 //! SSGI kernels.
@@ -147,13 +147,14 @@ void Main(int2 did : SV_DispatchThreadID)
     }
 
     float  depth         = g_DepthBuffer.SampleLevel(g_PointSampler, uv, 0);
-    float  linear_depth  = GetLinearDepth(depth);
+    float  linear_depth  = toLinearDepth(depth, g_NearFar);
 
-    float3 world_pos     = InverseProject(g_SSGIConstants.inv_view_proj, uv, depth);
+    float3 world_pos     = transformPointProjection(uv, depth, g_SSGIConstants.inv_view_proj);
     float3 world_normal  = normalize(2.0f * normal - 1.0f);
     float3 world_eye_dir = normalize(g_SSGIConstants.eye.xyz - world_pos);
 
-    float2 noise = BlueNoise_Sample2D(did, g_SSGIConstants.frame_index);        // in [0, 1]
+    BlueNoiseSampler blue_noise_sampler = MakeBlueNoiseSampler(did, g_SSGIConstants.frame_index);
+    float2 noise = blue_noise_sampler.rand2(); // in [0, 1]
 
     float  slice_uv_radius = g_SSGIConstants.uv_radius / linear_depth;
     float  ambient_occlusion = 0.f;
@@ -192,7 +193,7 @@ void Main(int2 did : SV_DispatchThreadID)
 
                 float2 sample_uv        = uv + side_signs[side_index] * sample_uv_offset;
                 float  sample_depth     = g_DepthBuffer.SampleLevel(g_PointSampler, sample_uv, 0);
-                float3 sample_world_pos = InverseProject(g_SSGIConstants.inv_view_proj, sample_uv, sample_depth);
+                float3 sample_world_pos = transformPointProjection(sample_uv, sample_depth, g_SSGIConstants.inv_view_proj);
 
                 float3 horizon_world_dir = sample_world_pos - world_pos;
                 float  horizon_world_len = length(horizon_world_dir);       // BE CAREFUL: main source of precision errors

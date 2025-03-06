@@ -30,9 +30,12 @@ Texture2D g_TextureMaps[] : register(space99);
 SamplerState g_TextureSampler;
 */
 
-#include "../../lights/light_sampling.hlsl"
-#include "../../lights/reservoir.hlsl"
-#include "../../math/random.hlsl"
+#include "components/light_builder/light_builder.hlsl"
+#include "lights/light_sampling.hlsl"
+#include "math/random.hlsl"
+#ifdef LIGHT_SAMPLER_ENABLE_RESERVOIR
+#include "lights/reservoir.hlsl"
+#endif
 
 struct LightSamplerUniform
 {
@@ -43,7 +46,7 @@ struct LightSamplerUniform
      * @param position Current position on surface.
      * @param normal   Shading normal vector at current position.
      * @param lightPDF (Out) The PDF for the calculated sample (is equal to zero if no valid samples could be found).
-     * @returns The index of the new light sample
+     * @return The index of the new light sample
      */
     uint sampleLights(float3 position, float3 normal, out float lightPDF)
     {
@@ -67,13 +70,14 @@ struct LightSamplerUniform
      * @param lightID  The index of the given light.
      * @param position The position on the surface currently being shaded.
      * @param normal   Shading normal vector at current position.
-     * @returns The calculated PDF with respect to the light.
+     * @return The calculated PDF with respect to the light.
      */
     float sampleLightPDF(uint lightID, float3 position, float3 normal)
     {
         return 1.0f / getNumberLights();
     }
 
+#ifdef LIGHT_SAMPLER_ENABLE_RESERVOIR
     /**
      * Sample multiple lights into a reservoir.
      * @tparam numSampledLights Number of lights to sample.
@@ -82,7 +86,7 @@ struct LightSamplerUniform
      * @param viewDirection View direction vector at current position.
      * @param solidAngle    Solid angle around view direction of visible ray cone.
      * @param material      Material for current surface position.
-     * @returns Reservoir containing combined samples.
+     * @return Reservoir containing combined samples.
      */
     template<uint numSampledLights>
     Reservoir sampleLightList(float3 position, float3 normal, float3 viewDirection, MaterialBRDF material)
@@ -109,7 +113,7 @@ struct LightSamplerUniform
             const uint lightIndex = randomNG.randInt(totalLights);
 
             // Add the light sample to the reservoir
-            updateReservoir(updater, randomNG, lightIndex, lightPDF, material, position, normal, viewDirection);
+            updateReservoir(updater, randomNG, lightIndex, lightPDF, material, position, normal, viewDirection, numLights);
         }
 
         // Get finalised reservoir for return
@@ -124,7 +128,7 @@ struct LightSamplerUniform
      * @param viewDirection View direction vector at current position.
      * @param solidAngle    Solid angle around view direction of visible ray cone.
      * @param material      Material for current surface position.
-     * @returns Reservoir containing combined samples.
+     * @return Reservoir containing combined samples.
      */
     template<uint numSampledLights>
     Reservoir sampleLightListCone(float3 position, float3 normal, float3 viewDirection, float solidAngle, MaterialBRDF material)
@@ -151,12 +155,27 @@ struct LightSamplerUniform
             const uint lightIndex = randomNG.randInt(totalLights);
 
             // Add the light sample to the reservoir
-            updateReservoirCone(updater, randomNG, lightIndex, lightPDF, material, position, normal, viewDirection, solidAngle);
+            updateReservoirCone(updater, randomNG, lightIndex, lightPDF, material, position, normal, viewDirection, solidAngle, numLights);
         }
 
         // Get finalised reservoir for return
         return updater.reservoir;
     }
+
+    /**
+     * Calculate the PDF of sampling a given light using one of the reservoir list sampling functions.
+     * @tparam numSampledLights Number of lights sampled.
+     * @param lightID  The index of the given light.
+     * @param position The position on the surface currently being shaded.
+     * @param normal   Shading normal vector at current position.
+     * @return The calculated PDF with respect to the light.
+     */
+    template<uint numSampledLights>
+    float sampleLightListPDF(uint lightID, float3 position, float3 normal)
+    {
+        return sampleLightPDF(lightID, position, normal);
+    }
+#endif
 };
 
 LightSamplerUniform MakeLightSampler(Random random)

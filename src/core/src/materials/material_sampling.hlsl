@@ -24,8 +24,9 @@ THE SOFTWARE.
 #define MATERIAL_SAMPLING_HLSL
 
 #include "material_evaluation.hlsl"
-#include "../math/quaternion.hlsl"
-#include "../math/color.hlsl"
+#include "math/color.hlsl"
+#include "math/sampling.hlsl"
+#include "math/quaternion.hlsl"
 
 /**
  * Calculate a sampled direction for the GGX BRDF using Heitz VNDF sampling.
@@ -138,7 +139,7 @@ float3 sampleGGXVNDFBounded(float roughnessAlpha, float3 localView, float2 sampl
     float3 wiStd = normalize(float3(roughnessAlpha * localView.xy, localView.z));
 
     float phi = 2.0f * PI * samples.y;
-    float a = roughnessAlpha; // Use a = saturate(min(roughnessAlpha.x, roughnessAlpha.y)) for anisotropic roughness.
+    float a = roughnessAlpha;
     float s = 1.0f + sign(1.0f - a) * length(float2(localView.x, localView.y));
     float a2 = a * a;
     float s2 = s * s;
@@ -155,20 +156,6 @@ float3 sampleGGXVNDFBounded(float roughnessAlpha, float3 localView, float2 sampl
     // Convert normal to un-stretched and normalise
     float3 wm = normalize(float3(roughnessAlpha * wmStd.xy, wmStd.z));
     return wm;
-}
-
-/**
- * Calculate a random direction around a +z axis oriented hemisphere.
- * @note Uses a cosine-weighted distribution
- * @param samples Random number samples used to generate direction.
- * @return The sampled direction in local space.
- */
-float3 sampleHemisphere(float2 samples)
-{
-    // Ray Tracing Gems - Sampling Transformations Zoo - Shirley
-    float a = sqrt(samples.x);
-    float b = TWO_PI * samples.y;
-    return float3(a * cos(b), a * sin(b), sqrt(1.0f - samples.x));
 }
 
 /**
@@ -236,7 +223,7 @@ float sampleGGXVNDFBoundedPDF(float roughnessAlphaSqr, float dotNH, float3 local
     float t = sqrt(len2 + localView.z * localView.z);
     if (localView.z >= 0.0f)
     {
-        float a = roughnessAlpha; // Use a = saturate(min(roughnessAlpha.x, roughnessAlpha.y)) for anisotropic roughness.
+        float a = roughnessAlpha;
         float s = 1.0f + sign(1.0f - a) * length(float2(localView.x, localView.y));
         float a2 = a * a;
         float s2 = s * s;
@@ -289,7 +276,7 @@ float3 calculateGGXSpecularDirection(float3 normal, float3 viewDirection, float 
 float3 sampleLambert(float3 albedo, float2 samples)
 {
     // Sample the local space uniform hemisphere
-    return sampleHemisphere(samples);
+    return mapToCosineHemisphere(samples);
 }
 
 /**
@@ -299,7 +286,7 @@ float3 sampleLambert(float3 albedo, float2 samples)
  */
 float sampleLambertPDF(float dotNL)
 {
-    return saturate(dotNL) / PI; // PDF for the upper hemisphere.
+    return saturate(dotNL) * INV_PI; // PDF for the upper hemisphere.
 }
 
 /**
@@ -331,12 +318,12 @@ float calculateBRDFProbability(float3 F0, float dotHV, float3 albedo)
 
 /**
  * Calculate the PDF for given values for the combined BRDF.
- * @param material      Material data describing BRDF.
- * @param dotNH         The dot product of the normal and half vector (range [-1, 1]).
- * @param dotNL         The dot product of the normal and light direction (range [-1, 1]).
- * @param dotHV         The dot product of the half-vector and view direction (range [-1, 1]).
- * @param dotNV         The dot product of the normal and view direction (range [-1, 1]).
- * @param localView     Outgoing ray view direction (in local space).
+ * @param material  Material data describing BRDF.
+ * @param dotNH     The dot product of the normal and half vector (range [-1, 1]).
+ * @param dotNL     The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotHV     The dot product of the half-vector and view direction (range [-1, 1]).
+ * @param dotNV     The dot product of the normal and view direction (range [-1, 1]).
+ * @param localView Outgoing ray view direction (in local space).
  * @return The calculated PDF.
  */
 float sampleBRDFPDF(MaterialBRDF material, float dotNH, float dotNL, float dotHV, float dotNV, float3 localView)
@@ -348,6 +335,35 @@ float sampleBRDFPDF(MaterialBRDF material, float dotNH, float dotNL, float dotHV
     float pdf = sampleLambertPDF(dotNL);
 #endif
     return pdf;
+}
+
+/**
+ * Calculate the PDF for given values for the combined BRDF.
+ * @param material       Material data describing BRDF.
+ * @param normal         Shading normal vector at current position.
+ * @param viewDirection  Outgoing ray view direction.
+ * @param lightDirection Incoming ray light direction.
+ * @return The calculated PDF.
+ */
+float sampleBRDFPDF(MaterialBRDF material, float3 normal, float3 viewDirection, float3 lightDirection)
+{
+    // Evaluate BRDF for new light direction
+    float dotNL = clamp(dot(normal, lightDirection), -1.0f, 1.0f);
+    // Calculate half vector
+    float3 halfVector = normalize(viewDirection + lightDirection);
+    // Calculate shading angles
+    float dotHV = saturate(dot(halfVector, viewDirection));
+    float dotNH = clamp(dot(normal, halfVector), -1.0f, 1.0f);
+    float dotNV = clamp(dot(normal, viewDirection), -1.0f, 1.0f);
+
+    // Transform the view direction into the surfaces tangent coordinate space (oriented so that z axis is aligned to normal)
+    Quaternion localRotation = QuaternionRotationZ(normal);
+    float3 localView = localRotation.transform(viewDirection);
+
+    // Calculate combined PDF for current sample
+    // Note: has some duplicated calculations in evaluateBRDF and sampleBRDFPDF
+    float samplePDF = sampleBRDFPDF(material, dotNH, dotNL, dotHV, dotNV, localView);
+    return samplePDF;
 }
 
 /**
@@ -469,7 +485,7 @@ float3 sampleBRDFType(MaterialBRDF material, inout RNG randomNG, float3 normal, 
     // Calculate shading angles
     float specularDotHV = saturate(dot(specularHalfVector, viewDirection));
     float probabilityBRDF = calculateBRDFProbability(material.F0, specularDotHV, material.albedo);
-    specularSampled = randomNG.rand() < probabilityBRDF;
+    specularSampled = (randomNG.rand() < probabilityBRDF ? true : false);
     if (specularSampled)
     {
         // Sample specular BRDF component
@@ -524,7 +540,7 @@ template<typename RNG>
 float3 sampleBRDF(MaterialBRDF material, inout RNG randomNG, float3 normal, float3 viewDirection,
     out float3 reflectance, out float pdf)
 {
-    bool unused;
+    bool unused = false;
     return sampleBRDFType(material, randomNG, normal, viewDirection, reflectance, pdf, unused);
 }
 
@@ -574,7 +590,7 @@ float3 sampleBRDFDiffuse(MaterialBRDF material, inout RNG randomNG, float3 norma
 
 /**
  * Calculate the PDF and evaluate radiance for given values for the diffuse BRDF component.
- * @remark This should only be used for rays generated by sampleBRDFDiffuse as otherwise the PDF
+ * @note This should only be used for rays generated by sampleBRDFDiffuse as otherwise the PDF
  *  values will be incorrect. When combining diffuse+specular rays with NEE then 3 component form
  *  of MIS must be used.
  * @param material       Material data describing BRDF.
@@ -649,7 +665,7 @@ float3 sampleBRDFSpecular(MaterialBRDF material, inout RNG randomNG, float3 norm
 
 /**
  * Calculate the PDF and evaluate radiance for given values for the specular BRDF component.
- * @remark This should only be used for rays generated by sampleBRDFSpecular as otherwise the PDF
+ * @note This should only be used for rays generated by sampleBRDFSpecular as otherwise the PDF
  *  values will be incorrect. When combining diffuse+specular rays with NEE then 3 component form
  *  of MIS must be used.
  * @param material       Material data describing BRDF.

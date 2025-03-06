@@ -54,19 +54,19 @@ public:
         PSNR,  /**< Peak Signal to noise ratio */
         RMAE,  /**< Relative Mean Absolute Error */
         SMAPE, /**< Symmetric Mean Absolute Percentage Error */
-        SSIM, /**< Structural Similarity */
+        SSIM,  /**< Structural Similarity */
     };
 
     /**
      * Initialise the internal data based on current configuration.
-     * @param gfx        Active gfx context.
-     * @param shaderPath Path to shader files based on current working directory.
-     * @param type       The object type to reduce.
-     * @param operation  The type of operation to perform.
+     * @param gfxIn         Active gfx context.
+     * @param shaderPaths Paths to shader files based on current working directory.
+     * @param type        The object type to reduce.
+     * @param operation   The type of operation to perform.
      * @return True, if any initialisation/changes succeeded.
      */
-    bool initialise(
-        GfxContext gfx, std::string_view const &shaderPath, Type type, Operation operation) noexcept;
+    bool initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths, Type type,
+        Operation operation) noexcept;
 
     /**
      * Initialise the internal data based on current configuration.
@@ -80,10 +80,10 @@ public:
     /**
      * Generate comparison metrics for 2 different images.
      * @note This will flush the current GPU pipeline so only call this function is no other work is to be
-     * performed. Otherwise use 'compareAsync'.
+     * performed. Otherwise, use 'compareAsync'.
      * @param sourceImage    The input image to compare.
      * @param referenceImage The reference image to compare to.
-     * @returns True, if operation succeeded.
+     * @return True, if operation succeeded.
      */
     bool compare(GfxTexture const &sourceImage, GfxTexture const &referenceImage) noexcept;
 
@@ -92,7 +92,7 @@ public:
      * Used if calculating metrics for multiple frames as it allows many frames in flight at a time.
      * @param sourceImage    The input image to compare.
      * @param referenceImage The reference image to compare to.
-     * @returns True, if operation succeeded.
+     * @return True, if operation succeeded.
      */
     bool compareAsync(GfxTexture const &sourceImage, GfxTexture const &referenceImage) noexcept;
 
@@ -100,15 +100,15 @@ public:
      * Read back the value of the most recent calculated metric.
      * @note When using 'compareAsync' there will be a delay before the final value is available. This delay
      * can be retrieved using 'getAsyncDelay'.
-     * @returns The calculate metric value, Zero if no value is available.
+     * @return The calculated metric value, Zero if no value is available.
      */
-    float getMetricValue() const noexcept;
+    [[nodiscard]] float getMetricValue() const noexcept;
 
     /**
      * Get the number of frames of delay there is when using 'compareAsync'.
-     * @returns The number of frames worth of delay.
+     * @return The number of frames worth of delay.
      */
-    uint32_t getAsyncDelay() const noexcept;
+    [[nodiscard]] uint32_t getAsyncDelay() const noexcept;
 
 private:
     /** Terminates and cleans up this object. */
@@ -116,7 +116,7 @@ private:
 
     bool compareInternal(GfxTexture const &sourceImage, GfxTexture const &referenceImage) noexcept;
 
-    float convertMetric(float value, uint32_t totalSamples) const noexcept;
+    [[nodiscard]] float convertMetric(float value, uint32_t totalSamples) const noexcept;
 
     GfxContext gfx;
 
@@ -126,7 +126,7 @@ private:
     GfxBuffer metricBuffer; /**< Buffer used to hold calculated metric */
     std::vector<std::pair<float, GfxBuffer>>
           metricBufferTemp;    /**< Buffer used to copy back calculated metric into CPU memory */
-    float currentValue = 1.0f; /**< Most recent calculated metric value */
+    float currentValue = 1.0F; /**< Most recent calculated metric value */
 
     GfxProgram metricsProgram;
     GfxKernel  metricsKernel;

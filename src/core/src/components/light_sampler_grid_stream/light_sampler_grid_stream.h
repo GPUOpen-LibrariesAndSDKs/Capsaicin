@@ -24,28 +24,28 @@ THE SOFTWARE.
 #include "capsaicin_internal.h"
 #include "components/component.h"
 #include "components/light_sampler/light_sampler.h"
-#include "components/light_sampler_grid_cdf/light_sampler_grid_cdf.h"
 #include "utilities/gpu_reduce.h"
 
 namespace Capsaicin
 {
-class LightSamplerGridStream
+class LightSamplerGridStream final
     : public LightSampler
-    , public ComponentFactory::Registrar<LightSamplerGridStream>
-    , public LightSamplerFactory::Registrar<LightSamplerGridStream>
+    , ComponentFactory::Registrar<LightSamplerGridStream>
+    , LightSamplerFactory::Registrar<LightSamplerGridStream>
 {
 public:
     static constexpr std::string_view Name = "LightSamplerGridStream";
-
-    LightSamplerGridStream(LightSamplerGridStream const &) noexcept = delete;
-
-    LightSamplerGridStream(LightSamplerGridStream &&) noexcept = default;
 
     /** Constructor. */
     LightSamplerGridStream() noexcept;
 
     /** Destructor. */
-    ~LightSamplerGridStream() noexcept;
+    ~LightSamplerGridStream() noexcept override;
+
+    LightSamplerGridStream(LightSamplerGridStream const &other)                = delete;
+    LightSamplerGridStream(LightSamplerGridStream &&other) noexcept            = delete;
+    LightSamplerGridStream &operator=(LightSamplerGridStream const &other)     = delete;
+    LightSamplerGridStream &operator=(LightSamplerGridStream &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -61,7 +61,7 @@ public:
         bool light_grid_stream_octahedron_sampling =
             false; /**< Use octahedron sampling for each cell to also sample by direction */
         bool light_grid_stream_resample =
-            true; /**< Use resampling based on local illumination when using reservoir sampling */
+            false; /**< Use resampling based on local illumination when using reservoir sampling */
         uint32_t light_grid_stream_merge_type =
             1; /**< Select merge type, 0: Random reservoir selection, 1: Merge without replacement, 2: Merge
                   with replacement (allows high importance lights to be multiply sampled) */
@@ -74,7 +74,7 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -82,7 +82,7 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -121,7 +121,7 @@ public:
     void reserveBoundsValues(uint32_t reserve, std::type_info const &caller) noexcept;
 
     template<typename T>
-    void reserveBoundsValues(uint32_t reserve, [[maybe_unused]] T const *const caller) noexcept
+    void reserveBoundsValues(uint32_t const reserve, [[maybe_unused]] T const *const caller) noexcept
     {
         reserveBoundsValues(reserve, typeid(T));
     }
@@ -131,11 +131,12 @@ public:
      * Alternatively if calculating bounds dynamically at runtime the reserveBoundsValues() function can be
      * used instead. This function can be skipped if just using whole scene bounds.
      * @param bounds The volume bounds.
+     * @param caller  The technique or component that is reserving memory.
      */
     void setBounds(std::pair<float3, float3> const &bounds, std::type_info const &caller) noexcept;
 
     template<typename T>
-    void setBounds(std::pair<float3, float3> const &bounds, [[maybe_unused]] T const *const) noexcept
+    void setBounds(std::pair<float3, float3> const &bounds, [[maybe_unused]] T const *const caller) noexcept
     {
         setBounds(bounds, typeid(T));
     }
@@ -156,7 +157,7 @@ public:
      * @param capsaicin Current framework context.
      * @return True if an update occurred requiring internal updates to be performed.
      */
-    bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
@@ -164,7 +165,8 @@ public:
      * @param capsaicin Current framework context.
      * @return A vector with each required define.
      */
-    std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Add the required program parameters to a shader based on current settings.
@@ -172,20 +174,21 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept override;
+    void addProgramParameters(
+        CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept override;
 
     /**
-     * Check if the scenes lighting data was changed this frame.
+     * Check if the light settings have changed (i.e. enabled/disabled lights).
      * @param capsaicin Current framework context.
-     * @returns True if light data has changed.
+     * @return True if light settings have changed.
      */
-    bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the name of the header file used in HLSL code to include necessary sampler functions.
      * @return String name of the HLSL header include.
      */
-    std::string_view getHeaderFile() const noexcept override;
+    [[nodiscard]] std::string_view getHeaderFile() const noexcept override;
 
 private:
     bool initKernels(CapsaicinInternal const &capsaicin) noexcept;
@@ -195,8 +198,8 @@ private:
     RenderOptions options;
     bool          recompileFlag =
         false; /**< Flag to indicate if option change requires a shader recompile this frame */
-    bool lightsUpdatedFlag = false; /**< Flag to indicate if option change effects light samples */
-    bool usingManyLights   = false; /**< Flag indicating if ,any lights parallel build is in use */
+    bool lightSettingsUpdatedFlag = false; /**< Flag to indicate if option change effects light samples */
+    bool usingManyLights          = false; /**< Flag indicating if ,any lights parallel build is in use */
 
     std::map<size_t, uint32_t>
         boundsReservations; /**< List of any reservations made using reserveBoundsValues() */
@@ -221,6 +224,7 @@ private:
 
     GfxProgram boundsProgram;
     GfxKernel  calculateBoundsKernel;
+    GfxProgram buildProgram;
     GfxKernel  buildKernel;
 };
 } // namespace Capsaicin

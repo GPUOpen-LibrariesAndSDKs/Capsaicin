@@ -29,6 +29,9 @@ StructuredBuffer<uint> g_ScramblingTile;
 
 #define GOLDEN_RATIO 1.61803398874989484820f
 
+namespace NoExport
+{
+
 float samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp(in int pixel_i, in int pixel_j, in int sampleIndex, in int sampleDimension)
 {
     // A Low-Discrepancy Sampler that Distributes Monte Carlo Errors as a Blue Noise in Screen Space - Heitz etal
@@ -92,6 +95,36 @@ float3 BlueNoise_Sample3D(in uint2 pixel, in uint sample_index, in uint dimensio
 float3 BlueNoise_Sample3D(in uint2 pixel, in uint sample_index)
 {
     return BlueNoise_Sample3D(pixel, sample_index, 0);
+}
+    
+}
+
+class BlueNoiseSampler
+{
+    uint2 pixel;
+    uint sample_index;
+    uint dimension_offset;
+
+    float rand()
+    {
+        return NoExport::BlueNoise_Sample1D(pixel, sample_index++, dimension_offset);
+    }
+
+    float2 rand2()
+    {
+        return NoExport::BlueNoise_Sample2D(pixel, sample_index++, dimension_offset);
+    }
+
+    float3 rand3()
+    {
+        return NoExport::BlueNoise_Sample3D(pixel, sample_index++, dimension_offset);
+    }
+};
+
+BlueNoiseSampler MakeBlueNoiseSampler(uint2 pixel, uint sample_index, uint dimension_offset = 0)
+{
+    BlueNoiseSampler ret = { pixel, sample_index, dimension_offset };
+    return ret;
 }
 
 #endif // BLUE_NOISE_SAMPLER_HLSL

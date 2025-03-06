@@ -21,8 +21,11 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
+#include "gpu_shared.h"
+
 #include <dxgiformat.h>
 #include <map>
+#include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -30,57 +33,109 @@ THE SOFTWARE.
 namespace Capsaicin
 {
 /**
- * Type used to pass information about requested AOVs between capsaicin and render techniques.
+ * Type used to pass information about requested shared textures between capsaicin and render techniques.
  */
-struct AOV
+struct SharedTexture
 {
-    const std::string_view name; /**< The name to identify the AOV */
+    std::string_view name; /**< The name to identify the shared texture */
 
-    enum Access
+    enum class Access : uint8_t
     {
         Read,
         Write,
         ReadWrite,
-    } access = Read; /**< The type of access pattern a render technique requires */
+    } access = Access::Read; /**< The type of access pattern a render technique requires */
 
-    enum Flags
+    enum class Flags : uint8_t
     {
         None       = 0,      /**< Use default values */
         Clear      = 1 << 1, /**< True to clear buffer every frame */
         Accumulate = 1 << 2, /**< True to allow the buffer to accumulate over frames (this is used for
                                 error checking to prevent the frame being cleared) */
-        Optional = 1 << 3,   /**< True if AOV should only be used if another non-optional request is made */
-    } flags = None;
+        Optional = 1 << 3, /**< True if texture should only be used if another non-optional request is made */
+    } flags = Flags::None;
 
-    const DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; /**< The internal buffer format (If using read then
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; /**< The internal buffer format (If using read then
                                                        format can be set to unknown to use auto setup) */
 
-    const std::string_view backup_name =
-        std::string_view(); /**< The name to identify the AOV backup (blank if no backup required) */
+    uint2 dimensions = uint2(
+        0, 0); /**< The width and height of texture (if any are set to 0 then will b sized to the window) */
+    bool mips = false; /**< True to allocate space for mip maps */
+
+    std::string_view backup_name =
+        ""; /**< The name to identify the texture backup (blank if no backup required) */
+
+    bool operator==(SharedTexture const &other) const noexcept { return name == other.name; }
 };
 
-using AOVList = std::vector<AOV>;
+inline bool operator&(SharedTexture::Access const flags, SharedTexture::Access const flags2) noexcept
+{
+    return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(flags2)) != 0;
+}
+
+inline bool operator&(SharedTexture::Flags const flags, SharedTexture::Flags const flags2) noexcept
+{
+    return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(flags2)) != 0;
+}
+
+inline SharedTexture::Flags operator|(
+    SharedTexture::Flags const flags, SharedTexture::Flags const flags2) noexcept
+{
+    return static_cast<SharedTexture::Flags>(static_cast<uint8_t>(flags) | static_cast<uint8_t>(flags2));
+}
+
+using SharedTextureList = std::vector<SharedTexture>;
 
 using DebugViewList = std::vector<std::string_view>;
 
 /**
- * Type used to pass information about requested Bufferss between capsaicin and render techniques.
+ * Type used to pass information about requested shared buffers between capsaicin and render techniques.
  */
-struct Buffer
+struct SharedBuffer
 {
-    const std::string_view name; /**< The name to identify the buffer */
+    std::string_view name; /**< The name to identify the buffer */
 
-    enum Access
+    enum class Access : uint8_t
     {
         Read,
         Write,
         ReadWrite,
-    } access = Read; /**< The type of access pattern a render technique requires */
+    } access = Access::Read; /**< The type of access pattern a render technique requires */
 
-    const size_t size = 0; /**< The size of the buffer */
+    enum class Flags : uint8_t
+    {
+        None       = 0,      /**< Use default values */
+        Clear      = 1 << 1, /**< True to clear buffer every frame */
+        Accumulate = 1 << 2, /**< True to allow the buffer to accumulate over frames (this is used for
+                                error checking to prevent the frame being cleared) */
+        Optional = 1 << 3, /**< True if texture should only be used if another non-optional request is made */
+        Allocate =
+            1 << 4, /**< True if current technique/component will be responsible for allocating buffer */
+    } flags = Flags::None;
+
+    size_t   size   = 0; /**< The size of the buffer in Bytes */
+    uint32_t stride = 0; /**< The size in bytes of each element to be held in the buffer */
+
+    bool operator==(SharedBuffer const &other) const noexcept { return name == other.name; }
 };
 
-using BufferList = std::vector<Buffer>;
+inline bool operator&(SharedBuffer::Access const flags, SharedBuffer::Access const flags2) noexcept
+{
+    return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(flags2)) != 0;
+}
+
+inline bool operator&(SharedBuffer::Flags const flags, SharedBuffer::Flags const flags2) noexcept
+{
+    return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(flags2)) != 0;
+}
+
+inline SharedBuffer::Flags operator|(
+    SharedBuffer::Flags const flags, SharedBuffer::Flags const flags2) noexcept
+{
+    return static_cast<SharedBuffer::Flags>(static_cast<uint8_t>(flags) | static_cast<uint8_t>(flags2));
+}
+
+using SharedBufferList = std::vector<SharedBuffer>;
 
 using ComponentList = std::vector<std::string_view>;
 
@@ -98,10 +153,10 @@ using ComponentList = std::vector<std::string_view>;
  * @param  options  The instance of render options to read value from.
  */
 #define RENDER_OPTION_GET(variable, ret, options) \
-    ret.variable = *std::get_if<decltype(ret.variable)>(&options.at(#variable));
+    ret.variable = *std::get_if<decltype((ret).variable)>(&(options).at(#variable));
 
 #define COMPONENT_MAKE(type) ComponentFactory::Registrar<type>::registeredName<>
 
-using option           = std::variant<bool, uint32_t, int32_t, float>;
-using RenderOptionList = std::map<std::string_view, option>;
+using Option           = std::variant<bool, uint32_t, int32_t, float, std::string>;
+using RenderOptionList = std::map<std::string_view, Option>;
 } // namespace Capsaicin

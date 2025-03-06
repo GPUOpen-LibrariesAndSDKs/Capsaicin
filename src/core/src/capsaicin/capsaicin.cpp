@@ -22,7 +22,6 @@ THE SOFTWARE.
 #include "capsaicin.h"
 
 #include "capsaicin_internal.h"
-#include "thread_pool.h"
 
 namespace
 {
@@ -31,10 +30,12 @@ Capsaicin::CapsaicinInternal *g_renderer = nullptr;
 
 namespace Capsaicin
 {
-void Initialize(GfxContext gfx, ImGuiContext *imgui_context) noexcept
+void Initialize(GfxContext const &gfx, ImGuiContext *imgui_context) noexcept
 {
-    if (g_renderer != nullptr) Terminate();
-    ThreadPool::Create(std::thread::hardware_concurrency());
+    if (g_renderer != nullptr)
+    {
+        Terminate();
+    }
     g_renderer = new CapsaicinInternal();
     g_renderer->initialize(gfx, imgui_context);
 }
@@ -46,246 +47,454 @@ std::vector<std::string_view> GetRenderers() noexcept
 
 std::string_view GetCurrentRenderer() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getCurrentRenderer();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getCurrentRenderer();
+    }
     return "";
 }
 
 bool SetRenderer(std::string_view const &name) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->setRenderer(name);
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->setRenderer(name);
+    }
     return false;
 }
 
-std::vector<std::string> GetCurrentScenes() noexcept
+std::vector<std::filesystem::path> GetCurrentScenes() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getCurrentScenes();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getCurrentScenes();
+    }
     return {};
 }
 
-bool SetScenes(std::vector<std::string> const &names) noexcept
+bool SetScene(std::filesystem::path const &fileName) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->setScenes(names);
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->setScene(fileName);
+    }
+    return false;
+}
+
+bool AppendScene(std::filesystem::path const &fileName) noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->appendScene(fileName);
+    }
     return false;
 }
 
 std::vector<std::string_view> GetSceneCameras() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getSceneCameras();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSceneCameras();
+    }
     return {};
 }
 
 std::string_view GetSceneCurrentCamera() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getSceneCurrentCamera();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSceneCurrentCamera();
+    }
     return "";
 }
 
-GfxRef<GfxCamera> GetSceneCamera() noexcept
+CameraView GetSceneCameraView() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getSceneCamera();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSceneCameraView();
+    }
+    return {};
+}
+
+float GetSceneCameraFOV() noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSceneCameraFOV();
+    }
+    return {};
+}
+
+glm::vec2 GetSceneCameraRange() noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSceneCameraRange();
+    }
     return {};
 }
 
 bool SetSceneCamera(std::string_view const &name) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->setSceneCamera(name);
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->setSceneCamera(name);
+    }
     return false;
 }
 
-std::string GetCurrentEnvironmentMap() noexcept
+void SetSceneCameraView(glm::vec3 const &position, glm::vec3 const &forward, glm::vec3 const &up) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getCurrentEnvironmentMap();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setSceneCameraView(position, forward, up);
+    }
+}
+
+void SetSceneCameraFOV(float const FOVY) noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setSceneCameraFOV(FOVY);
+    }
+}
+
+void SetSceneCameraRange(glm::vec2 const &nearFar) noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setSceneCameraRange(nearFar);
+    }
+}
+
+std::filesystem::path GetCurrentEnvironmentMap() noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getCurrentEnvironmentMap();
+    }
     return "";
 }
 
-bool SetEnvironmentMap(std::string const &name) noexcept
+bool SetEnvironmentMap(std::filesystem::path const &fileName) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->setEnvironmentMap(name);
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->setEnvironmentMap(fileName);
+    }
     return false;
 }
 
 std::vector<std::string_view> GetDebugViews() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getDebugViews();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getDebugViews();
+    }
     return {};
 }
 
 std::string_view GetCurrentDebugView() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getCurrentDebugView();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getCurrentDebugView();
+    }
     return "";
 }
 
 bool SetDebugView(std::string_view const &name) noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->setDebugView(name);
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->setDebugView(name);
+    }
     return false;
 }
 
 std::vector<std::string_view> GetAOVs() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getAOVs();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getSharedTextures();
+    }
     return {};
 }
 
 void Render() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->render();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->render();
+    }
 }
 
-void RenderGUI(bool readOnly) noexcept
+void RenderGUI(bool const readOnly) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->renderGUI(readOnly);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->renderGUI(readOnly);
+    }
 }
 
 uint32_t GetFrameIndex() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getFrameIndex();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getFrameIndex();
+    }
 
     return 0;
 }
 
 double GetFrameTime() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getFrameTime();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getFrameTime();
+    }
     return 0.0;
 }
 
 double GetAverageFrameTime() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getAverageFrameTime();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getAverageFrameTime();
+    }
     return 0.0;
 }
 
 bool HasAnimation() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->hasAnimation();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->hasAnimation();
+    }
     return false;
 }
 
-void SetPaused(bool paused) noexcept
+void SetPaused(bool const paused) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->setPaused(paused);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setPaused(paused);
+    }
 }
 
 bool GetPaused() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getPaused();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getPaused();
+    }
     return true;
 }
 
-void SetFixedFrameRate(bool playMode) noexcept
+void SetFixedFrameRate(bool const playMode) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->setFixedFrameRate(playMode);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setFixedFrameRate(playMode);
+    }
 }
 
-void SetFixedFrameTime(double fixed_frame_time) noexcept
+void SetFixedFrameTime(double const fixed_frame_time) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->setFixedFrameTime(fixed_frame_time);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setFixedFrameTime(fixed_frame_time);
+    }
 }
 
 bool GetFixedFrameRate() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getFixedFrameRate();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getFixedFrameRate();
+    }
     return false;
 }
 
 void RestartPlayback() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->restartPlayback();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->restartPlayback();
+    }
 }
 
 void IncreasePlaybackSpeed() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->increasePlaybackSpeed();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->increasePlaybackSpeed();
+    }
 }
 
 void DecreasePlaybackSpeed() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->decreasePlaybackSpeed();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->decreasePlaybackSpeed();
+    }
 }
 
 double GetPlaybackSpeed() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getPlaybackSpeed();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getPlaybackSpeed();
+    }
     return 1.0;
 }
 
 void ResetPlaybackSpeed() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->resetPlaybackSpeed();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->resetPlaybackSpeed();
+    }
 }
 
-void StepPlaybackForward(uint32_t frames) noexcept
+void StepPlaybackForward(uint32_t const frames) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->stepPlaybackForward(frames);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->stepPlaybackForward(frames);
+    }
 }
 
-void StepPlaybackBackward(uint32_t frames) noexcept
+void StepPlaybackBackward(uint32_t const frames) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->stepPlaybackBackward(frames);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->stepPlaybackBackward(frames);
+    }
 }
 
-void SetPlayRewind(bool rewind) noexcept
+void SetPlayRewind(bool const rewind) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->setPlayRewind(rewind);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setPlayRewind(rewind);
+    }
 }
 
 bool GetPlayRewind() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getPlayRewind();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getPlayRewind();
+    }
     return false;
 }
 
-void SetRenderPaused(bool paused) noexcept
+void SetRenderPaused(bool const paused) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->setRenderPaused(paused);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setRenderPaused(paused);
+    }
 }
 
 bool GetRenderPaused() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getRenderPaused();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getRenderPaused();
+    }
     return true;
 }
 
-void StepJitterFrameIndex(uint32_t frames)
+void StepJitterFrameIndex(uint32_t const frames)
 {
-    if (g_renderer != nullptr) g_renderer->stepJitterFrameIndex(frames);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->stepJitterFrameIndex(frames);
+    }
+}
+
+void SetCameraJitterPhase(uint32_t const length)
+{
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setCameraJitterPhase(length);
+    }
 }
 
 uint32_t GetDeltaLightCount() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getDeltaLightCount();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getDeltaLightCount();
+    }
     return 0;
 }
 
 uint32_t GetAreaLightCount() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getAreaLightCount();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getAreaLightCount();
+    }
     return 0;
 }
 
 uint32_t GetEnvironmentLightCount() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getEnvironmentLightCount();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getEnvironmentLightCount();
+    }
     return 0;
 }
 
 uint32_t GetTriangleCount() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getTriangleCount();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getTriangleCount();
+    }
     return 0;
 }
 
 uint64_t GetBvhDataSize() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getBvhDataSize();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getBvhDataSize();
+    }
     return 0;
+}
+
+std::pair<uint32_t, uint32_t> GetWindowDimensions() noexcept
+{
+    auto const ret = (g_renderer != nullptr) ? g_renderer->getWindowDimensions() : uint2(0);
+    return std::make_pair(ret.x, ret.y);
+}
+
+std::pair<uint32_t, uint32_t> GetRenderDimensions() noexcept
+{
+    auto const ret = (g_renderer != nullptr) ? g_renderer->getRenderDimensions() : uint2(0);
+    return std::make_pair(ret.x, ret.y);
+}
+
+void SetRenderDimensionsScale(float const scale) noexcept
+{
+    if (g_renderer != nullptr)
+    {
+        g_renderer->setRenderDimensionsScale(scale);
+    }
 }
 
 RenderOptionList &GetOptions() noexcept
 {
-    if (g_renderer != nullptr) return g_renderer->getOptions();
+    if (g_renderer != nullptr)
+    {
+        return g_renderer->getOptions();
+    }
     static RenderOptionList nullList;
     return nullList;
 }
@@ -294,22 +503,30 @@ void Terminate() noexcept
 {
     delete g_renderer;
     g_renderer = nullptr;
-    ThreadPool::Destroy();
 }
 
-CAPSAICIN_EXPORT void ReloadShaders() noexcept
+void ReloadShaders() noexcept
 {
-    if (g_renderer != nullptr) g_renderer->reloadShaders();
+    if (g_renderer != nullptr)
+    {
+        g_renderer->reloadShaders();
+    }
 }
 
-void DumpAOVBuffer(char const *file_path, std::string_view const &aov) noexcept
+void DumpDebugView(std::filesystem::path const &file_path, std::string_view const &view) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->dumpAOVBuffer(file_path, aov);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->dumpDebugView(file_path, view);
+    }
 }
 
-void DumpCamera(char const *file_path, bool jittered) noexcept
+void DumpCamera(std::filesystem::path const &file_path, bool const jittered) noexcept
 {
-    if (g_renderer != nullptr) g_renderer->dumpCamera(file_path, jittered);
+    if (g_renderer != nullptr)
+    {
+        g_renderer->dumpCamera(file_path, jittered);
+    }
 }
 
 } // namespace Capsaicin

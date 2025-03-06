@@ -25,11 +25,16 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class SSGI : public RenderTechnique
+class SSGI final : public RenderTechnique
 {
 public:
     SSGI();
-    ~SSGI();
+    ~SSGI() override;
+
+    SSGI(const SSGI &other)                = delete;
+    SSGI(SSGI &&other) noexcept            = delete;
+    SSGI &operator=(const SSGI &other)     = delete;
+    SSGI &operator=(SSGI &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -41,15 +46,15 @@ public:
     {
         uint32_t ssgi_slice_count_   = 1;
         uint32_t ssgi_step_count_    = 2;
-        float    ssgi_view_radius_   = 0.2f;
-        float    ssgi_falloff_range_ = 0.05f;
+        float    ssgi_view_radius_   = 0.2F;
+        float    ssgi_falloff_range_ = 0.05F;
         bool     ssgi_unroll_kernel_ = false; // BE CAREFUL: if true, check shader for slice and step counts
     };
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -57,19 +62,19 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Gets a list of any debug views provided by the current render technique.
      * @return A list of all supported debug views.
      */
-    DebugViewList getDebugViews() const noexcept override;
+    [[nodiscard]] DebugViewList getDebugViews() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -93,15 +98,11 @@ public:
 
 protected:
     void initializeStaticResources(CapsaicinInternal const &capsaicin);
-    void initializeBuffers(CapsaicinInternal const &capsaicin);
     void initializeKernels(CapsaicinInternal const &capsaicin);
-    void destroyStaticResources();
-    void destroyBuffers();
-    void destroyKernels();
+    void destroyStaticResources() const;
+    void destroyKernels() const;
 
     RenderOptions options_;
-    uint32_t      buffer_width_;
-    uint32_t      buffer_height_;
 
     // Buffers
 

@@ -23,8 +23,8 @@ THE SOFTWARE.
 #ifndef LIGHTS_HLSL
 #define LIGHTS_HLSL
 
-#include "../lights/lights_shared.h"
-#include "../math/pack.hlsl"
+#include "lights/lights_shared.h"
+#include "math/pack.hlsl"
 
 /** Light data representing a area light */
 struct LightArea
@@ -32,7 +32,7 @@ struct LightArea
     float3 v0; /**< The light triangles first vertex */
     float3 v1; /**< The light triangles second vertex */
     float3 v2; /**< The light triangles third vertex */
-    float4 emissivity; /**< The lights emissivity */
+    float4 emissivity; /**< The lights emissivity (Note: w=lightmap texture) */
     float2 uv0; /**< The lights triangles first vertex uv coordinate */
     float2 uv1; /**< The lights triangles second vertex uv coordinate  */
     float2 uv2; /**< The lights triangles third vertex uv coordinate  */

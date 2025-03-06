@@ -39,8 +39,13 @@ public:
     /** Destructor. */
     ~GPUReduce() noexcept;
 
+    GPUReduce(GPUReduce const &other)                = delete;
+    GPUReduce(GPUReduce &&other) noexcept            = delete;
+    GPUReduce &operator=(GPUReduce const &other)     = delete;
+    GPUReduce &operator=(GPUReduce &&other) noexcept = delete;
+
     /** Type of value to reduce. */
-    enum class Type : uint32_t
+    enum class Type : uint8_t
     {
         Float = 0,
         Float2,
@@ -61,7 +66,7 @@ public:
     };
 
     /** Type of reduce operation to perform. */
-    enum class Operation
+    enum class Operation : uint8_t
     {
         Sum,
         Min,
@@ -71,14 +76,14 @@ public:
 
     /**
      * Initialise the internal data based on current configuration.
-     * @param gfx        Active gfx context.
-     * @param shaderPath Path to shader files based on current working directory.
-     * @param type       The object type to reduce.
-     * @param operation  The type of operation to perform.
+     * @param gfxIn         Active gfx context.
+     * @param shaderPaths Path to shader files based on current working directory.
+     * @param type        The object type to reduce.
+     * @param operation   The type of operation to perform.
      * @return True, if any initialisation/changes succeeded.
      */
-    bool initialise(
-        GfxContext gfx, std::string_view const &shaderPath, Type type, Operation operation) noexcept;
+    bool initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths, Type type,
+        Operation operation) noexcept;
 
     /**
      * Initialise the internal data based on current configuration.

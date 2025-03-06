@@ -22,10 +22,22 @@ THE SOFTWARE.
 
 #include "gpu_sort.h"
 
-#define FFX_CPP
-#include "FFX_ParallelSort.h"
 #include "buffer_view.h"
 #include "capsaicin_internal.h"
+
+#define FFX_CPU
+#ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wmissing-braces"
+#    pragma clang diagnostic ignored "-Wunused-function"
+#endif
+#include <FidelityFX/gpu/ffx_core.h>
+#include <FidelityFX/host/ffx_util.h>
+// Order of includes is important
+#include <FidelityFX/gpu/parallelsort/ffx_parallelsort.h>
+#ifdef __clang__
+#    pragma clang diagnostic pop
+#endif
 
 namespace Capsaicin
 {
@@ -34,20 +46,20 @@ GPUSort::~GPUSort() noexcept
     terminate();
 }
 
-bool GPUSort::initialise(
-    GfxContext gfxIn, std::string_view const &shaderPath, Type type, Operation operation) noexcept
+bool GPUSort::initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths,
+    Type const type, Operation const operation) noexcept
 {
     gfx = gfxIn;
 
     if (!parallelSortCBBuffer)
     {
         // Currently we just allocate enough for a max number of 16 segments
-        parallelSortCBBuffer = gfxCreateBuffer<FFX_ParallelSortCB>(gfx, 1 * 16);
-        parallelSortCBBuffer.setName("Capsaicin_ParallelSortCBBuffer");
+        parallelSortCBBuffer = gfxCreateBuffer<FfxParallelSortConstants>(gfx, 1 * 16);
+        parallelSortCBBuffer.setName("ParallelSortCBBuffer");
         countScatterArgsBuffer = gfxCreateBuffer<uint>(gfx, 3 * 16);
-        countScatterArgsBuffer.setName("Capsaicin_CountScatterArgsBuffer");
+        countScatterArgsBuffer.setName("CountScatterArgsBuffer");
         reduceScanArgsBuffer = gfxCreateBuffer<uint>(gfx, 3 * 16);
-        reduceScanArgsBuffer.setName("Capsaicin_ReduceScanArgsBuffer");
+        reduceScanArgsBuffer.setName("ReduceScanArgsBuffer");
     }
 
     if (type != currentType || operation != currentOperation)
@@ -82,7 +94,15 @@ bool GPUSort::initialise(
         gfxDestroyKernel(gfx, scanAdd);
         gfxDestroyKernel(gfx, scatter);
         gfxDestroyKernel(gfx, scatterPayload);
-        sortProgram = gfxCreateProgram(gfx, "utilities/gpu_sort", shaderPath.data());
+
+        std::vector<char const *> includePaths;
+        includePaths.reserve(shaderPaths.size());
+        for (auto const &path : shaderPaths)
+        {
+            includePaths.push_back(path.c_str());
+        }
+        sortProgram = gfxCreateProgram(gfx, "utilities/gpu_sort", includePaths[0], nullptr,
+            includePaths.data(), static_cast<uint32_t>(includePaths.size()));
         std::vector<char const *> baseDefines;
         switch (currentType)
         {
@@ -94,6 +114,7 @@ bool GPUSort::initialise(
         {
         case Operation::Ascending: baseDefines.push_back("OP=0"); break;
         case Operation::Descending: baseDefines.push_back("OP=1"); break;
+        default: break;
         }
         setupIndirect = gfxCreateComputeKernel(gfx, sortProgram, "setupIndirectParameters",
             baseDefines.data(), static_cast<uint32_t>(baseDefines.size()));
@@ -114,9 +135,10 @@ bool GPUSort::initialise(
     return !!scatterPayload;
 }
 
-bool GPUSort::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+bool GPUSort::initialise(
+    CapsaicinInternal const &capsaicin, Type const type, Operation const operation) noexcept
 {
-    return initialise(capsaicin.getGfx(), capsaicin.getShaderPath(), type, operation);
+    return initialise(capsaicin.getGfx(), capsaicin.getShaderPaths(), type, operation);
 }
 
 void GPUSort::terminate() noexcept
@@ -157,63 +179,62 @@ void GPUSort::terminate() noexcept
 }
 
 void GPUSort::sortIndirect(
-    GfxBuffer const &sourceBuffer, GfxBuffer const &numKeys, const uint maxNumKeys) noexcept
+    GfxBuffer const &sourceBuffer, GfxBuffer const &numKeys, uint const maxNumKeys) noexcept
 {
     sortInternal(sourceBuffer, maxNumKeys, &numKeys);
 }
 
 void GPUSort::sortIndirectPayload(GfxBuffer const &sourceBuffer, GfxBuffer const &numKeys,
-    const uint maxNumKeys, GfxBuffer const &sourcePayload) noexcept
+    uint const maxNumKeys, GfxBuffer const &sourcePayload) noexcept
 {
     sortInternal(sourceBuffer, maxNumKeys, &numKeys, &sourcePayload);
 }
 
-void GPUSort::sort(GfxBuffer const &sourceBuffer, const uint numKeys) noexcept
+void GPUSort::sort(GfxBuffer const &sourceBuffer, uint const numKeys) noexcept
 {
     sortInternal(sourceBuffer, numKeys);
 }
 
 void GPUSort::sortPayload(
-    GfxBuffer const &sourceBuffer, const uint numKeys, GfxBuffer const &sourcePayload) noexcept
+    GfxBuffer const &sourceBuffer, uint const numKeys, GfxBuffer const &sourcePayload) noexcept
 {
     sortInternal(sourceBuffer, numKeys, nullptr, &sourcePayload);
 }
 
-void GPUSort::sortIndirectSegmented(GfxBuffer const &sourceBuffer, const uint numSegments,
-    GfxBuffer const &numKeys, const uint maxNumKeys) noexcept
+void GPUSort::sortIndirectSegmented(GfxBuffer const &sourceBuffer, uint const numSegments,
+    GfxBuffer const &numKeys, uint const maxNumKeys) noexcept
 {
     sortInternalSegmented(sourceBuffer, {}, maxNumKeys, numSegments, &numKeys);
 }
 
-void GPUSort::sortIndirectPayloadSegmented(GfxBuffer const &sourceBuffer, const uint numSegments,
-    GfxBuffer const &numKeys, const uint maxNumKeys, GfxBuffer const &sourcePayload) noexcept
+void GPUSort::sortIndirectPayloadSegmented(GfxBuffer const &sourceBuffer, uint const numSegments,
+    GfxBuffer const &numKeys, uint const maxNumKeys, GfxBuffer const &sourcePayload) noexcept
 {
     sortInternalSegmented(sourceBuffer, {}, maxNumKeys, numSegments, &numKeys, &sourcePayload);
 }
 
-void GPUSort::sortSegmented(
-    GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys, const uint maxNumKeys) noexcept
+void GPUSort::sortSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys) noexcept
 {
-    sortInternalSegmented(sourceBuffer, numKeys, maxNumKeys);
+    sortInternalSegmented(sourceBuffer, numKeys, 0);
 }
 
-void GPUSort::sortPayloadSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys,
-    const uint maxNumKeys, GfxBuffer const &sourcePayload) noexcept
+void GPUSort::sortPayloadSegmented(
+    GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys, GfxBuffer const &sourcePayload) noexcept
 {
-    sortInternalSegmented(sourceBuffer, numKeys, maxNumKeys, UINT_MAX, nullptr, &sourcePayload);
+    sortInternalSegmented(sourceBuffer, numKeys, 0, UINT_MAX, nullptr, &sourcePayload);
 }
 
-void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys, GfxBuffer const *numKeys,
+void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, uint const maxNumKeys, GfxBuffer const *numKeys,
     GfxBuffer const *sourcePayload) noexcept
 {
     // Check if we have payload to also sort
-    bool hasPayload = sourcePayload;
+    bool const hasPayload = sourcePayload != nullptr;
 
     // Check if indirect
-    bool indirect = (numKeys != nullptr);
+    bool const indirect = (numKeys != nullptr);
 
-    uint numThreadgroupsToRun        = 0;
-    uint numReducedThreadgroupsToRun = 0;
+    uint numThreadGroupsToRun        = 0;
+    uint numReducedThreadGroupsToRun = 0;
     if (indirect)
     {
         // Run the indirect sort setup kernel
@@ -227,28 +248,28 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
     }
     else
     {
-        FFX_ParallelSortCB constantBufferData = {0};
-        FFX_ParallelSort_SetConstantAndDispatchData(
-            maxNumKeys, 800, constantBufferData, numThreadgroupsToRun, numReducedThreadgroupsToRun);
+        FfxParallelSortConstants constantBufferData = {};
+        ffxParallelSortSetConstantAndDispatchData(
+            maxNumKeys, 800, constantBufferData, numThreadGroupsToRun, numReducedThreadGroupsToRun);
         gfxDestroyBuffer(gfx, parallelSortCBBuffer);
-        parallelSortCBBuffer = gfxCreateBuffer<FFX_ParallelSortCB>(gfx, 1, &constantBufferData);
+        parallelSortCBBuffer = gfxCreateBuffer<FfxParallelSortConstants>(gfx, 1, &constantBufferData);
     }
 
     // Make scratch buffers
-    uint scratchBufferSize;
-    uint reducedScratchBufferSize;
-    FFX_ParallelSort_CalculateScratchResourceSize(maxNumKeys, scratchBufferSize, reducedScratchBufferSize);
+    uint scratchBufferSize        = 0;
+    uint reducedScratchBufferSize = 0;
+    ffxParallelSortCalculateScratchResourceSize(maxNumKeys, scratchBufferSize, reducedScratchBufferSize);
     if (!scratchBuffer || (scratchBuffer.getSize() < scratchBufferSize))
     {
         gfxDestroyBuffer(gfx, scratchBuffer);
         scratchBuffer = gfxCreateBuffer(gfx, scratchBufferSize);
-        scratchBuffer.setName("Capsaicin_ScratchBuffer");
+        scratchBuffer.setName("ScratchBuffer");
     }
     if (!reducedScratchBuffer || (reducedScratchBuffer.getSize() < reducedScratchBufferSize))
     {
         gfxDestroyBuffer(gfx, reducedScratchBuffer);
         reducedScratchBuffer = gfxCreateBuffer(gfx, reducedScratchBufferSize);
-        reducedScratchBuffer.setName("Capsaicin_ReducedScratchBuffer");
+        reducedScratchBuffer.setName("ReducedScratchBuffer");
     }
 
     // Setup ping-pong buffers
@@ -256,13 +277,13 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
     {
         gfxDestroyBuffer(gfx, sourcePongBuffer);
         sourcePongBuffer = gfxCreateBuffer<uint>(gfx, maxNumKeys);
-        sourcePongBuffer.setName("Capsaicin_SourcePongBuffer");
+        sourcePongBuffer.setName("SourcePongBuffer");
     }
     if (hasPayload && (!payloadPongBuffer || ((payloadPongBuffer.getSize() / sizeof(uint)) < maxNumKeys)))
     {
         gfxDestroyBuffer(gfx, payloadPongBuffer);
         payloadPongBuffer = gfxCreateBuffer<uint>(gfx, maxNumKeys);
-        payloadPongBuffer.setName("Capsaicin_PayloadPongBuffer");
+        payloadPongBuffer.setName("PayloadPongBuffer");
     }
     GfxBuffer const *readBuffer(&sourceBuffer);
     GfxBuffer const *writeBuffer(&sourcePongBuffer);
@@ -270,7 +291,7 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
     GfxBuffer const *writePayloadBuffer(&payloadPongBuffer);
 
     // Perform Radix Sort (currently only support 32-bit key/payload sorting
-    for (uint32_t shift = 0; shift < 32u; shift += FFX_PARALLELSORT_SORT_BITS_PER_PASS)
+    for (uint32_t shift = 0; shift < 32U; shift += FFX_PARALLELSORT_SORT_BITS_PER_PASS)
     {
         // Sort Count
         {
@@ -286,7 +307,7 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
             }
             else
             {
-                gfxCommandDispatch(gfx, numThreadgroupsToRun, 1, 1);
+                gfxCommandDispatch(gfx, numThreadGroupsToRun, 1, 1);
             }
         }
 
@@ -301,7 +322,7 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
             }
             else
             {
-                gfxCommandDispatch(gfx, numReducedThreadgroupsToRun, 1, 1);
+                gfxCommandDispatch(gfx, numReducedThreadGroupsToRun, 1, 1);
             }
         }
 
@@ -324,7 +345,7 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
             }
             else
             {
-                gfxCommandDispatch(gfx, numReducedThreadgroupsToRun, 1, 1);
+                gfxCommandDispatch(gfx, numReducedThreadGroupsToRun, 1, 1);
             }
         }
 
@@ -347,7 +368,7 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
             }
             else
             {
-                gfxCommandDispatch(gfx, numThreadgroupsToRun, 1, 1);
+                gfxCommandDispatch(gfx, numThreadGroupsToRun, 1, 1);
             }
         }
 
@@ -358,45 +379,45 @@ void GPUSort::sortInternal(GfxBuffer const &sourceBuffer, const uint maxNumKeys,
 }
 
 void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeysList,
-    const uint maxNumKeys, uint numSegments, GfxBuffer const *numKeys,
+    uint const maxNumKeys, uint numSegments, GfxBuffer const *numKeys,
     GfxBuffer const *sourcePayload) noexcept
 {
     // Check if we have payload to also sort
-    bool hasPayload = sourcePayload != nullptr;
+    bool const hasPayload = sourcePayload != nullptr;
 
     // Check if indirect
-    bool isIndirect = (numKeys != nullptr);
+    bool const isIndirect = (numKeys != nullptr);
 
-    numSegments = isIndirect ? numSegments : (uint)numKeysList.size();
+    numSegments = isIndirect ? numSegments : static_cast<uint>(numKeysList.size());
 
-    std::vector<BufferView<FFX_ParallelSortCB>> parallelSortCBBufferViews;
-    std::vector<BufferView<uint>>               countScatterArgsBufferViews;
-    std::vector<BufferView<uint>>               reduceScanArgsBufferViews;
-    std::vector<BufferView<uint>>               numKeysViews;
-    std::vector<uint>                           numThreadgroupsToRun;
-    std::vector<uint>                           numReducedThreadgroupsToRun;
+    std::vector<BufferView<FfxParallelSortConstants>> parallelSortCBBufferViews;
+    parallelSortCBBufferViews.reserve(numSegments);
+    std::vector<BufferView<uint>> countScatterArgsBufferViews;
+    std::vector<BufferView<uint>> reduceScanArgsBufferViews;
+    std::vector<uint>             numThreadGroupsToRun;
+    std::vector<uint>             numReducedThreadGroupsToRun;
     if (isIndirect)
     {
         // Check if the buffers are big enough for all the requested segments
-        if (countScatterArgsBuffer.getCount() < 3 * numSegments)
+        if (countScatterArgsBuffer.getCount() < 4 * numSegments)
         {
             gfxDestroyBuffer(gfx, countScatterArgsBuffer);
             countScatterArgsBuffer = gfxCreateBuffer<uint>(gfx, 4 * numSegments); // Uses 4 for alignment
-            countScatterArgsBuffer.setName("Capsaicin_CountScatterArgsBuffer");
+            countScatterArgsBuffer.setName("CountScatterArgsBuffer");
             gfxDestroyBuffer(gfx, reduceScanArgsBuffer);
             reduceScanArgsBuffer = gfxCreateBuffer<uint>(gfx, 4 * numSegments);
-            reduceScanArgsBuffer.setName("Capsaicin_ReduceScanArgsBuffer");
+            reduceScanArgsBuffer.setName("ReduceScanArgsBuffer");
         }
         if (parallelSortCBBuffer.getCount() < numSegments)
         {
             gfxDestroyBuffer(gfx, parallelSortCBBuffer);
-            parallelSortCBBuffer = gfxCreateBuffer<FFX_ParallelSortCB>(gfx, numSegments);
-            parallelSortCBBuffer.setName("Capsaicin_ParallelSortCBBuffer");
+            parallelSortCBBuffer = gfxCreateBuffer<FfxParallelSortConstants>(gfx, numSegments);
+            parallelSortCBBuffer.setName("ParallelSortCBBuffer");
         }
         // Create the individual views into the buffers
-        parallelSortCBBufferViews.reserve(numSegments);
         countScatterArgsBufferViews.reserve(numSegments);
         reduceScanArgsBufferViews.reserve(numSegments);
+        std::vector<BufferView<uint>> numKeysViews;
         numKeysViews.reserve(numSegments);
         for (uint i = 0; i < numSegments; ++i)
         {
@@ -421,18 +442,24 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
     }
     else
     {
-        std::vector<FFX_ParallelSortCB> constantBufferData;
-        constantBufferData.reserve(numSegments);
+        std::vector<FfxParallelSortConstants> constantBufferData;
+        constantBufferData.resize(numSegments);
+        numThreadGroupsToRun.resize(numSegments);
+        numReducedThreadGroupsToRun.resize(numSegments);
         for (uint i = 0; i < numSegments; ++i)
         {
-            constantBufferData.push_back({0});
-            FFX_ParallelSort_SetConstantAndDispatchData(numKeysList[i], 800, constantBufferData[i],
-                numThreadgroupsToRun[i], numReducedThreadgroupsToRun[i]);
+            memset(&constantBufferData[i], 0, sizeof(FfxParallelSortConstants));
+            ffxParallelSortSetConstantAndDispatchData(numKeysList[i], 800, constantBufferData[i],
+                numThreadGroupsToRun[i], numReducedThreadGroupsToRun[i]);
         }
         gfxDestroyBuffer(gfx, parallelSortCBBuffer);
         parallelSortCBBuffer =
-            gfxCreateBuffer<FFX_ParallelSortCB>(gfx, numSegments, constantBufferData.data());
-        parallelSortCBBuffer.setName("Capsaicin_ParallelSortCBBuffer");
+            gfxCreateBuffer<FfxParallelSortConstants>(gfx, numSegments, constantBufferData.data());
+        parallelSortCBBuffer.setName("ParallelSortCBBuffer");
+        for (uint i = 0; i < numSegments; ++i)
+        {
+            parallelSortCBBufferViews.emplace_back(gfx, parallelSortCBBuffer, i, 1);
+        }
     }
 
     // Make scratch buffers
@@ -440,33 +467,32 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
     std::vector<uint> reducedScratchBufferCount;
     uint              totalScratchBufferCount        = 0;
     uint              totalReducedScratchBufferCount = 0;
-    uint              totalKeys                      = maxNumKeys * numSegments;
+    uint              totalKeys                      = 0;
     // Size each buffer based on maxNumKeys or exact segment size of known
-    scratchBufferCount.reserve(numSegments);
-    reducedScratchBufferCount.reserve(numSegments);
+    scratchBufferCount.resize(numSegments);
+    reducedScratchBufferCount.resize(numSegments);
     for (uint i = 0; i < numSegments; ++i)
     {
-        uint bufferSize = isIndirect ? maxNumKeys : numKeysList[i];
-        scratchBufferCount.push_back(0); // Initialise vector element
-        reducedScratchBufferCount.push_back(0);
-        FFX_ParallelSort_CalculateScratchResourceSize(
+        uint const bufferSize = isIndirect ? maxNumKeys : numKeysList[i];
+        ffxParallelSortCalculateScratchResourceSize(
             bufferSize, scratchBufferCount[i], reducedScratchBufferCount[i]);
         scratchBufferCount[i] /= sizeof(uint); // Convert from size to count
         reducedScratchBufferCount[i] /= sizeof(uint);
         totalScratchBufferCount += scratchBufferCount[i];
         totalReducedScratchBufferCount += reducedScratchBufferCount[i];
+        totalKeys += bufferSize;
     }
     if (!scratchBuffer || (scratchBuffer.getCount() < totalScratchBufferCount))
     {
         gfxDestroyBuffer(gfx, scratchBuffer);
         scratchBuffer = gfxCreateBuffer<uint>(gfx, totalScratchBufferCount);
-        scratchBuffer.setName("Capsaicin_ScratchBuffer");
+        scratchBuffer.setName("ScratchBuffer");
     }
     if (!reducedScratchBuffer || (reducedScratchBuffer.getCount() < totalReducedScratchBufferCount))
     {
         gfxDestroyBuffer(gfx, reducedScratchBuffer);
         reducedScratchBuffer = gfxCreateBuffer<uint>(gfx, totalReducedScratchBufferCount);
-        reducedScratchBuffer.setName("Capsaicin_ReducedScratchBuffer");
+        reducedScratchBuffer.setName("ReducedScratchBuffer");
     }
 
     // Setup ping-pong buffers
@@ -474,13 +500,13 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
     {
         gfxDestroyBuffer(gfx, sourcePongBuffer);
         sourcePongBuffer = gfxCreateBuffer<uint>(gfx, totalKeys);
-        sourcePongBuffer.setName("Capsaicin_SourcePongBuffer");
+        sourcePongBuffer.setName("SourcePongBuffer");
     }
     if (hasPayload && (!payloadPongBuffer || (payloadPongBuffer.getCount() < totalKeys)))
     {
         gfxDestroyBuffer(gfx, payloadPongBuffer);
         payloadPongBuffer = gfxCreateBuffer<uint>(gfx, totalKeys);
-        payloadPongBuffer.setName("Capsaicin_PayloadPongBuffer");
+        payloadPongBuffer.setName("PayloadPongBuffer");
     }
     std::vector<BufferView<uint>> sourceBufferViews;
     std::vector<BufferView<uint>> sourcePongBufferViews;
@@ -497,18 +523,19 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
     payloadPongBufferViews.reserve(numSegments);
     for (uint i = 0, offset = 0, scratchOffset = 0, reduceOffset = 0; i < numSegments; ++i)
     {
-        sourceBufferViews.emplace_back(gfx, sourceBuffer, offset, maxNumKeys);
-        sourcePongBufferViews.emplace_back(gfx, sourcePongBuffer, offset, maxNumKeys);
+        uint const bufferSize = isIndirect ? maxNumKeys : numKeysList[i];
+        sourceBufferViews.emplace_back(gfx, sourceBuffer, offset, bufferSize);
+        sourcePongBufferViews.emplace_back(gfx, sourcePongBuffer, offset, bufferSize);
         scratchBufferViews.emplace_back(gfx, scratchBuffer, scratchOffset, scratchBufferCount[i]);
         reducedScratchBufferViews.emplace_back(
             gfx, reducedScratchBuffer, reduceOffset, reducedScratchBufferCount[i]);
 
         if (hasPayload)
         {
-            sourcePayloadViews.emplace_back(gfx, *sourcePayload, offset, maxNumKeys);
-            payloadPongBufferViews.emplace_back(gfx, payloadPongBuffer, offset, maxNumKeys);
+            sourcePayloadViews.emplace_back(gfx, *sourcePayload, offset, bufferSize);
+            payloadPongBufferViews.emplace_back(gfx, payloadPongBuffer, offset, bufferSize);
         }
-        offset += maxNumKeys;
+        offset += bufferSize;
         scratchOffset += scratchBufferCount[i];
         reduceOffset += reducedScratchBufferCount[i];
     }
@@ -519,7 +546,7 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
     std::vector<BufferView<uint>> const *writePayloadBuffer(&payloadPongBufferViews);
 
     // Perform Radix Sort (currently only support 32-bit key/payload sorting
-    for (uint32_t shift = 0; shift < 32u; shift += FFX_PARALLELSORT_SORT_BITS_PER_PASS)
+    for (uint32_t shift = 0; shift < 32U; shift += FFX_PARALLELSORT_SORT_BITS_PER_PASS)
     {
         // Sort Count
         {
@@ -536,7 +563,7 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
                 }
                 else
                 {
-                    gfxCommandDispatch(gfx, numThreadgroupsToRun[i], 1, 1);
+                    gfxCommandDispatch(gfx, numThreadGroupsToRun[i], 1, 1);
                 }
             }
         }
@@ -555,7 +582,7 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
                 }
                 else
                 {
-                    gfxCommandDispatch(gfx, numReducedThreadgroupsToRun[i], 1, 1);
+                    gfxCommandDispatch(gfx, numReducedThreadGroupsToRun[i], 1, 1);
                 }
             }
         }
@@ -586,7 +613,7 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
                 }
                 else
                 {
-                    gfxCommandDispatch(gfx, numReducedThreadgroupsToRun[i], 1, 1);
+                    gfxCommandDispatch(gfx, numReducedThreadGroupsToRun[i], 1, 1);
                 }
             }
         }
@@ -618,7 +645,7 @@ void GPUSort::sortInternalSegmented(GfxBuffer const &sourceBuffer, std::vector<u
                 }
                 else
                 {
-                    gfxCommandDispatch(gfx, numThreadgroupsToRun[i], 1, 1);
+                    gfxCommandDispatch(gfx, numThreadGroupsToRun[i], 1, 1);
                 }
             }
         }

@@ -38,37 +38,44 @@ class Timeable
 public:
     class TimedSection
     {
-        TimedSection(TimedSection const &)            = delete;
-        TimedSection &operator=(TimedSection const &) = delete;
-
     public:
-        TimedSection(Timeable &parent, std::string_view const &name) noexcept;
+        TimedSection(Timeable &parentTimeable, std::string_view const &name) noexcept;
         ~TimedSection() noexcept;
+
+        TimedSection(TimedSection const &other)                = delete;
+        TimedSection(TimedSection &&other) noexcept            = delete;
+        TimedSection &operator=(TimedSection const &other)     = delete;
+        TimedSection &operator=(TimedSection &&other) noexcept = delete;
 
     private:
         Timeable      &parent;
-        uint32_t const queryIndex;
+        uint32_t const queryIndex = 0;
     };
 
     /** Defaulted constructor. */
     Timeable() noexcept = default;
 
-    Timeable(std::string_view const &name) noexcept;
+    explicit Timeable(std::string_view const &name) noexcept;
+
+    Timeable(Timeable const &other)                = default;
+    Timeable(Timeable &&other) noexcept            = default;
+    Timeable &operator=(Timeable const &other)     = default;
+    Timeable &operator=(Timeable &&other) noexcept = default;
 
     /** Defaulted destructor. */
-    ~Timeable() noexcept;
+    virtual ~Timeable() noexcept;
 
     /**
      * Gets number of timestamp queries.
-     * @returns The timestamp query count.
+     * @return The timestamp query count.
      */
-    virtual uint32_t getTimestampQueryCount() const noexcept;
+    [[nodiscard]] virtual uint32_t getTimestampQueryCount() const noexcept;
 
     /**
      * Gets timestamp queries.
-     * @returns The timestamp queries.
+     * @return The timestamp queries.
      */
-    virtual std::vector<TimestampQuery> const &getTimestampQueries() const noexcept;
+    [[nodiscard]] virtual std::vector<TimestampQuery> const &getTimestampQueries() const noexcept;
 
     /** Resets the timed section queries */
     virtual void resetQueries() noexcept;
@@ -81,9 +88,9 @@ public:
 
     /**
      * Gets the name of the timeable.
-     * @returns The name string.
+     * @return The name string.
      */
-    std::string_view getName() const noexcept;
+    [[nodiscard]] std::string_view getName() const noexcept;
 
 protected:
     std::vector<TimestampQuery> queries;        /**< The array of timestamp queries. */

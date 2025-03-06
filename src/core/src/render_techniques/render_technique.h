@@ -30,16 +30,18 @@ class CapsaicinInternal;
 
 class RenderTechnique : public Timeable
 {
-    RenderTechnique(RenderTechnique const &)            = delete;
-    RenderTechnique &operator=(RenderTechnique const &) = delete;
-
 public:
-    RenderTechnique(std::string_view const &name) noexcept;
-    virtual ~RenderTechnique() noexcept = default;
+    explicit RenderTechnique(std::string_view const &name) noexcept;
+    ~RenderTechnique() noexcept override = default;
+
+    RenderTechnique(RenderTechnique const &other)                = delete;
+    RenderTechnique(RenderTechnique &&other) noexcept            = delete;
+    RenderTechnique &operator=(RenderTechnique const &other)     = delete;
+    RenderTechnique &operator=(RenderTechnique &&other) noexcept = delete;
 
     /**
      * Gets the name of the technique.
-     * @returns The name string.
+     * @return The name string.
      */
     using Timeable::getName;
 
@@ -53,25 +55,25 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    virtual ComponentList getComponents() const noexcept;
+    [[nodiscard]] virtual ComponentList getComponents() const noexcept;
 
     /**
      * Gets a list of any shared buffers used by the current render technique.
      * @return A list of all supported buffers.
      */
-    virtual BufferList getBuffers() const noexcept;
+    [[nodiscard]] virtual SharedBufferList getSharedBuffers() const noexcept;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    virtual AOVList getAOVs() const noexcept;
+    [[nodiscard]] virtual SharedTextureList getSharedTextures() const noexcept;
 
     /**
      * Gets a list of any debug views provided by the current render technique.
      * @return A list of all supported debug views.
      */
-    virtual DebugViewList getDebugViews() const noexcept;
+    [[nodiscard]] virtual DebugViewList getDebugViews() const noexcept;
 
     /**
      * Initialise any internal data or state.
@@ -80,7 +82,7 @@ public:
      * @param capsaicin Current framework context.
      * @return True if initialisation succeeded, False otherwise.
      */
-    virtual bool init(CapsaicinInternal const &capsaicin) noexcept = 0;
+    [[nodiscard]] virtual bool init(CapsaicinInternal const &capsaicin) noexcept = 0;
 
     /**
      * Perform render operations.
@@ -98,7 +100,5 @@ public:
      * @param [in,out] capsaicin The current capsaicin context.
      */
     virtual void renderGUI(CapsaicinInternal &capsaicin) const noexcept;
-
-protected:
 };
 } // namespace Capsaicin

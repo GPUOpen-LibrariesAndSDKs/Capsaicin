@@ -21,7 +21,7 @@ THE SOFTWARE.
 ********************************************************************/
 
 #include "atmosphere.hlsl"
-#include "../../math/transform.hlsl"
+#include "math/transform.hlsl"
 
 float3   g_Eye;
 uint     g_FaceIndex;

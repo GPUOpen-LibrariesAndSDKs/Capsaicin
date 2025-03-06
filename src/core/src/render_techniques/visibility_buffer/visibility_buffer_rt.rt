@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -43,16 +43,18 @@ RaytracingPipelineConfig VisibilityPipelineConfig =
 void VisibilityRTRaygen()
 {
     uint2 did = DispatchRaysIndex().xy;
-    visibilityRT(did, g_BufferDimensions);
+    visibilityRT(did, g_VBConstants[0].dimensions);
 }
 
 [shader("anyhit")]
 void VisibilityRTAnyHit(inout PathData path, in BuiltInTriangleIntersectionAttributes attr)
 {
+#ifndef DISABLE_ALPHA_TESTING
     if (!AlphaTest(GetHitInfoRt(attr)))
     {
         IgnoreHit();
     }
+#endif
 }
 
 [shader("closesthit")]

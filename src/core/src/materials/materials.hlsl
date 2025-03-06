@@ -28,7 +28,7 @@ Texture2D g_TextureMaps[] : register(space99);
 SamplerState g_TextureSampler;
 */
 
-#include "../gpu_shared.h"
+#include "gpu_shared.h"
 
 /** Material data representing a material already evaluated at a specific UV coordinate. */
 struct MaterialEvaluated
@@ -83,6 +83,51 @@ MaterialEvaluated MakeMaterialEvaluated(Material material, float2 uv)
     return ret;
 }
 
+/**
+ * Calculates material data by evaluating any texture data.
+ * @param material The material to evaluate.
+ * @param uv       The UV coordinates to evaluate the material at.
+ * @param gradX    The UV partial derivatives along the X axis.
+ * @param gradY    The UV partial derivatives along the Y axis.
+ * @return The new material data.
+ */
+MaterialEvaluated MakeMaterialEvaluated(Material material, float2 uv, float2 gradX, float2 gradY)
+{
+    // Load initial values and any textures
+    float3 albedo = material.albedo.xyz;
+    uint albedoTex = asuint(material.albedo.w);
+    if (albedoTex != uint(-1))
+    {
+        albedo *= g_TextureMaps[NonUniformResourceIndex(albedoTex)].SampleGrad(g_TextureSampler, uv, gradX, gradY).xyz;
+    }
+
+#ifndef DISABLE_SPECULAR_MATERIALS
+    float metallicity = material.metallicity_roughness.x;
+    uint metallicityTex = asuint(material.metallicity_roughness.y);
+    if (metallicityTex != uint(-1))
+    {
+        metallicity *= g_TextureMaps[NonUniformResourceIndex(metallicityTex)].SampleGrad(g_TextureSampler, uv, gradX, gradY).x;
+    }
+
+    float roughness = material.metallicity_roughness.z;
+    uint roughnessTex = asuint(material.metallicity_roughness.w);
+    if (roughnessTex != uint(-1))
+    {
+        roughness *= g_TextureMaps[NonUniformResourceIndex(roughnessTex)].SampleGrad(g_TextureSampler, uv, gradX, gradY).x;
+    }
+#endif
+
+    MaterialEvaluated ret =
+    {
+        albedo,
+#ifndef DISABLE_SPECULAR_MATERIALS
+        metallicity,
+        roughness
+#endif
+    };
+    return ret;
+}
+
 /** Material data required for current BRDF type. */
 struct MaterialBRDF
 {
@@ -93,6 +138,37 @@ struct MaterialBRDF
     float roughnessAlphaSqr;
 #endif
 };
+
+/**
+ * Convert perceptual roughness to alpha roughness.
+ * @param perceptualRoughness Perceptual roughness.
+ * @return Alpha roughness.
+ */
+float ConvertPerceptualRoughnessToAlpha(const float perceptualRoughness)
+{
+    return perceptualRoughness * perceptualRoughness;
+}
+
+/**
+ * Convert alpha roughness to perceptual roughness.
+ * @param alpha Alpha roughness.
+ * @return Perceptual roughness.
+ */
+float ConvertAlphaToPerceptualRoughness(const float alpha)
+{
+    return sqrt(alpha);
+}
+
+/**
+ * Clamp alpha roughness for numerical stability.
+ * @param alpha Alpha roughness.
+ * @return Clamped alpha roughness.
+ */
+float ClampAlphaRoughness(const float alpha)
+{
+    const float ALPHA_MIN = 0.000001;
+    return max(alpha, ALPHA_MIN);
+}
 
 /**
  * Calculates the material data directly from an evaluated material.
@@ -108,10 +184,8 @@ MaterialBRDF MakeMaterialBRDF(MaterialEvaluated material)
     // Calculate albedo/F0 using metallicity
     float3 F0 = lerp(0.04f.xxx, albedo, material.metallicity);
     albedo *= (1.0f - material.metallicity);
-    // Micro-facet alpha is equal to roughness^2
-    float roughnessAlpha = material.roughness * material.roughness;
-    roughnessAlpha = max(0.000001, roughnessAlpha); // Fix for GGX not being able to handle 0 roughness
-    float roughnessAlphaSqr = max(0.000001, roughnessAlpha * roughnessAlpha);
+    float roughnessAlpha = ClampAlphaRoughness(ConvertPerceptualRoughnessToAlpha(material.roughness));
+    float roughnessAlphaSqr = ClampAlphaRoughness(roughnessAlpha * roughnessAlpha);
 #endif
 
     MaterialBRDF ret =
@@ -135,6 +209,19 @@ MaterialBRDF MakeMaterialBRDF(MaterialEvaluated material)
 MaterialBRDF MakeMaterialBRDF(Material material, float2 uv)
 {
     return MakeMaterialBRDF(MakeMaterialEvaluated(material, uv));
+}
+
+/**
+ * Calculates the material reflectance data for the internal material type.
+ * @param material Renderer data describing material.
+ * @param uv       The texture UV values at intersected position.
+ * @param gradX    The UV partial derivatives along the X axis.
+ * @param gradY    The UV partial derivatives along the Y axis.
+ * @return The new material data.
+ */
+MaterialBRDF MakeMaterialBRDF(Material material, float2 uv, float2 gradX, float2 gradY)
+{
+    return MakeMaterialBRDF(MakeMaterialEvaluated(material, uv, gradX, gradY));
 }
 
 /** Material data required for checking current alpha mask/blend. */
@@ -164,33 +251,25 @@ MaterialAlpha MakeMaterialAlpha(Material material, float2 uv)
     return ret;
 }
 
-/** Material data representing only emissive properties. */
-struct MaterialEmissive
-{
-    float3 emissive;
-};
-
 /**
- * Calculates the material emissive properties for the internal material type.
+ * Calculates the material mask/blend data for the internal material type.
  * @param material Renderer data describing material.
  * @param uv       The texture UV values at intersected position.
+ * @param gradX    The UV partial derivatives along the X axis.
+ * @param gradY    The UV partial derivatives along the Y axis.
  * @return The new material data.
  */
-MaterialEmissive MakeMaterialEmissive(Material material, float2 uv)
+MaterialAlpha MakeMaterialAlpha(Material material, float2 uv, float2 gradX, float2 gradY)
 {
-    // Load initial values
-    float3 emissivity = material.emissivity.xyz;
-
-    // Get any light maps
-    uint emissivityTex = asuint(material.emissivity.w);
-    if (emissivityTex != uint(-1))
+    float alpha = material.normal_alpha_side.y;
+    uint albedoTex = asuint(material.albedo.w);
+    if (albedoTex != uint(-1))
     {
-        // Determine texture UVs
-        emissivity *= g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, 0.0f).xyz;
+        alpha *= g_TextureMaps[NonUniformResourceIndex(albedoTex)].SampleGrad(g_TextureSampler, uv, gradX, gradY).w;
     }
-    MaterialEmissive ret =
+    MaterialAlpha ret =
     {
-        emissivity
+        alpha
     };
     return ret;
 }
@@ -202,6 +281,51 @@ struct MaterialBSDF : MaterialBRDF
 };
 
 /**
+ * Calculates the dimming of emissive materials due to alpha blending.
+ * @param material Renderer data describing material.
+ * @param uv       The texture UV values at intersected position.
+ * @return The emissive values with alpha scaling applied.
+ */
+float4 emissiveAlphaScaled(Material material, float2 uv)
+{
+    float4 areaEmissivity = material.emissivity;
+#ifdef DISABLE_ALPHA_TESTING
+    // We don't check if the current UV's have been alpha clipped as it is assumed that clipped geometry will never be rasterised/intersected
+    if (asuint(material.normal_alpha_side.w) == 2)
+    {
+        // Hit surfaces currently use stochastic alpha which reduces the likelihood of a surface intersection
+        //   by its relative alpha value. This has the effect of reducing emission with decreasing alpha.
+        //   When changing to a different alpha blending mode then this function must be updated to scale
+        //   emission by alpha
+        MaterialAlpha alpha = MakeMaterialAlpha(material, uv);
+        areaEmissivity.xyz *= alpha.alpha;
+    }
+#endif
+    return areaEmissivity;
+}
+
+/**
+ * Calculates the dimming of emissive materials due to alpha blending.
+ * @param material Renderer data describing material.
+ * @param uv       The texture UV values at intersected position.
+ * @param gradX    The UV partial derivatives along the X axis.
+ * @param gradY    The UV partial derivatives along the Y axis.
+ * @return The emissive values with alpha scaling applied.
+ */
+float4 emissiveAlphaScaled(Material material, float2 uv, float2 gradX, float2 gradY)
+{
+    float4 areaEmissivity = material.emissivity;
+#ifdef DISABLE_ALPHA_TESTING
+    if (asuint(material.normal_alpha_side.w) == 2)
+    {
+        MaterialAlpha alpha = MakeMaterialAlpha(material, uv, gradX, gradY);
+        areaEmissivity.xyz *= alpha.alpha;
+    }
+#endif
+    return areaEmissivity;
+}
+
+/**
  * Calculates the material data for the internal material type.
  * @param material Renderer data describing material.
  * @param uv       The texture UV values at intersected position.
@@ -211,7 +335,16 @@ MaterialBSDF MakeMaterialBSDF(Material material, float2 uv)
 {
     MaterialBRDF materialBRDF = MakeMaterialBRDF(material, uv);
 
-    MaterialEmissive materialEmissive = MakeMaterialEmissive(material, uv);
+    float4 areaEmissivity = emissiveAlphaScaled(material, uv);
+    float3 emissivity = areaEmissivity.xyz;
+
+    // Get any light maps
+    uint emissivityTex = asuint(areaEmissivity.w);
+    if (emissivityTex != uint(-1))
+    {
+        // Determine texture UVs
+        emissivity *= g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleLevel(g_TextureSampler, uv, 0.0f).xyz;
+    }
 
     MaterialBSDF ret =
     {
@@ -221,7 +354,43 @@ MaterialBSDF MakeMaterialBSDF(Material material, float2 uv)
         materialBRDF.F0,
         materialBRDF.roughnessAlphaSqr,
 #endif
-        materialEmissive.emissive
+        emissivity
+    };
+    return ret;
+}
+
+/**
+ * Calculates the material data for the internal material type.
+ * @param material Renderer data describing material.
+ * @param uv       The texture UV values at intersected position.
+ * @param gradX    The UV partial derivatives along the X axis.
+ * @param gradY    The UV partial derivatives along the Y axis.
+ * @return The new material data.
+ */
+MaterialBSDF MakeMaterialBSDF(Material material, float2 uv, float2 gradX, float2 gradY)
+{
+    MaterialBRDF materialBRDF = MakeMaterialBRDF(material, uv);
+
+    float4 areaEmissivity = emissiveAlphaScaled(material, uv);
+    float3 emissivity = areaEmissivity.xyz;
+
+    // Get any light maps
+    uint emissivityTex = asuint(areaEmissivity.w);
+    if (emissivityTex != uint(-1))
+    {
+        // Determine texture UVs
+        emissivity *= g_TextureMaps[NonUniformResourceIndex(emissivityTex)].SampleGrad(g_TextureSampler, uv, gradX, gradY).xyz;
+    }
+
+    MaterialBSDF ret =
+    {
+        materialBRDF.albedo,
+#ifndef DISABLE_SPECULAR_MATERIALS
+        materialBRDF.roughnessAlpha,
+        materialBRDF.F0,
+        materialBRDF.roughnessAlphaSqr,
+#endif
+        emissivity
     };
     return ret;
 }
@@ -241,20 +410,6 @@ MaterialBRDF MakeMaterialBRDF(MaterialBSDF material)
         material.F0,
         material.roughnessAlphaSqr,
 #endif
-    };
-    return ret;
-}
-
-/**
- * Convert a BSDF material to its sub emissive components.
- * @param material BSDF material.
- * @return The new material data.
- */
-MaterialEmissive MakeMaterialEmissive(MaterialBSDF material)
-{
-    MaterialEmissive ret =
-    {
-        material.emissive,
     };
     return ret;
 }

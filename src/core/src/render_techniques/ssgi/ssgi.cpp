@@ -67,17 +67,19 @@ ComponentList SSGI::getComponents() const noexcept
     return components;
 }
 
-AOVList SSGI::getAOVs() const noexcept
+SharedTextureList SSGI::getSharedTextures() const noexcept
 {
-    AOVList aovs;
-    aovs.push_back({"Debug", AOV::Write});
-    aovs.push_back({"OcclusionAndBentNormal", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"NearFieldGlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    SharedTextureList textures;
+    textures.push_back({"Debug", SharedTexture::Access::Write});
+    textures.push_back({"OcclusionAndBentNormal", SharedTexture::Access::Write, SharedTexture::Flags::None,
+        DXGI_FORMAT_R16G16B16A16_FLOAT});
+    textures.push_back({"NearFieldGlobalIllumination", SharedTexture::Access::Write,
+        SharedTexture::Flags::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
 
-    aovs.push_back({"VisibilityDepth"});
-    aovs.push_back({"ShadingNormal"});
-    aovs.push_back({"PrevCombinedIllumination"});
-    return aovs;
+    textures.push_back({"VisibilityDepth"});
+    textures.push_back({"ShadingNormal"});
+    textures.push_back({"PrevCombinedIllumination"});
+    return textures;
 }
 
 DebugViewList SSGI::getDebugViews() const noexcept
@@ -91,7 +93,6 @@ DebugViewList SSGI::getDebugViews() const noexcept
 bool SSGI::init(CapsaicinInternal const &capsaicin) noexcept
 {
     initializeStaticResources(capsaicin);
-    initializeBuffers(capsaicin);
     initializeKernels(capsaicin);
     return !!ssgi_program_;
 }
@@ -100,76 +101,66 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
 {
     // BE CAREFUL: Used for rendering current frame and initializing next frame
     auto const options            = convertOptions(capsaicin.getOptions());
-    auto       blue_noise_sampler = capsaicin.getComponent<BlueNoiseSampler>();
-    auto       stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
+    auto const blue_noise_sampler = capsaicin.getComponent<BlueNoiseSampler>();
+    auto const stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
 
-    options_ = options;
-
-    uint32_t   buffer_width      = capsaicin.getWidth();
-    uint32_t   buffer_height     = capsaicin.getHeight();
-    bool const need_reallocation = (buffer_width != buffer_width_ || buffer_height != buffer_height_);
-    if (need_reallocation)
-    {
-        destroyBuffers();
-        initializeBuffers(capsaicin);
-    }
+    options_                     = options;
+    auto const render_dimensions = capsaicin.getRenderDimensions();
 
     // Constants
-    GfxBuffer     ssgi_constant_buffer = capsaicin.allocateConstantBuffer<SSGIConstants>(1);
-    SSGIConstants ssgi_constants;
+    GfxBuffer const ssgi_constant_buffer = capsaicin.allocateConstantBuffer<SSGIConstants>(1);
+    auto const     &camera               = capsaicin.getCamera();
+    SSGIConstants   ssgi_constants;
     {
         auto const &camera_matrices      = capsaicin.getCameraMatrices();
-        auto const &camera               = capsaicin.getCamera();
         ssgi_constants.view              = camera_matrices.view;
         ssgi_constants.proj              = camera_matrices.projection;
         ssgi_constants.inv_view          = camera_matrices.inv_view;
         ssgi_constants.inv_proj          = camera_matrices.inv_projection;
         ssgi_constants.inv_view_proj     = camera_matrices.inv_view_projection;
-        ssgi_constants.eye               = glm::float4(camera.eye, 1.f);
-        ssgi_constants.forward           = glm::float4(glm::normalize(camera.center - camera.eye), 0.f);
-        ssgi_constants.buffer_dimensions = glm::int2(buffer_width_, buffer_height_);
+        ssgi_constants.eye               = glm::float4(camera.eye, 1.F);
+        ssgi_constants.forward           = glm::float4(normalize(camera.center - camera.eye), 0.F);
+        ssgi_constants.buffer_dimensions = render_dimensions;
         ssgi_constants.frame_index       = capsaicin.getFrameIndex();
         ssgi_constants.slice_count       = options_.ssgi_slice_count_;
         ssgi_constants.step_count        = options_.ssgi_step_count_;
         ssgi_constants.view_radius       = options_.ssgi_view_radius_;
-        ssgi_constants.uv_radius =
-            options_.ssgi_view_radius_ * 0.5f
-            * glm::max(camera_matrices.projection[0][0], camera_matrices.projection[1][1]);
-        float falloff_range        = options_.ssgi_view_radius_ * options_.ssgi_falloff_range_;
-        float falloff_from         = options_.ssgi_view_radius_ * (1.f - options_.ssgi_falloff_range_);
-        ssgi_constants.falloff_mul = -1.f / falloff_range;
-        ssgi_constants.falloff_add = falloff_from / falloff_range + 1.f;
+        ssgi_constants.uv_radius         = options_.ssgi_view_radius_ * 0.5F
+                                 * max(camera_matrices.projection[0][0], camera_matrices.projection[1][1]);
+        float const falloff_range  = options_.ssgi_view_radius_ * options_.ssgi_falloff_range_;
+        float const falloff_from   = options_.ssgi_view_radius_ * (1.F - options_.ssgi_falloff_range_);
+        ssgi_constants.falloff_mul = -1.F / falloff_range;
+        ssgi_constants.falloff_add = falloff_from / falloff_range + 1.F;
     }
     gfxBufferGetData<SSGIConstants>(gfx_, ssgi_constant_buffer)[0] = ssgi_constants;
 
-    gfxProgramSetParameter(gfx_, ssgi_program_, "g_NearFar",
-        glm::float2(capsaicin.getCamera().nearZ, capsaicin.getCamera().farZ));              //
-    gfxProgramSetParameter(gfx_, ssgi_program_, "g_InvDeviceZ", capsaicin.getInvDeviceZ()); //
+    gfxProgramSetParameter(gfx_, ssgi_program_, "g_NearFar", glm::float2(camera.nearZ, camera.farZ));
 
     blue_noise_sampler->addProgramParameters(capsaicin, ssgi_program_);
 
     stratified_sampler->addProgramParameters(capsaicin, ssgi_program_);
 
     gfxProgramSetParameter(gfx_, ssgi_program_, "g_SSGIConstants", ssgi_constant_buffer);
-    gfxProgramSetParameter(gfx_, ssgi_program_, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
     gfxProgramSetParameter(
-        gfx_, ssgi_program_, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
+        gfx_, ssgi_program_, "g_DepthBuffer", capsaicin.getSharedTexture("VisibilityDepth"));
     gfxProgramSetParameter(
-        gfx_, ssgi_program_, "g_LightingBuffer", capsaicin.getAOVBuffer("PrevCombinedIllumination"));
+        gfx_, ssgi_program_, "g_ShadingNormalBuffer", capsaicin.getSharedTexture("ShadingNormal"));
+    gfxProgramSetParameter(
+        gfx_, ssgi_program_, "g_LightingBuffer", capsaicin.getSharedTexture("PrevCombinedIllumination"));
     gfxProgramSetParameter(gfx_, ssgi_program_, "g_OcclusionAndBentNormalBuffer",
-        capsaicin.getAOVBuffer("OcclusionAndBentNormal"));
+        capsaicin.getSharedTexture("OcclusionAndBentNormal"));
     gfxProgramSetParameter(gfx_, ssgi_program_, "g_NearFieldGlobalIlluminationBuffer",
-        capsaicin.getAOVBuffer("NearFieldGlobalIllumination"));
+        capsaicin.getSharedTexture("NearFieldGlobalIllumination"));
     gfxProgramSetSamplerState(gfx_, ssgi_program_, "g_PointSampler", point_sampler_);
 
     {
         TimedSection const timed_section(*this, "Main");
 
-        GfxKernel main_kernel = options_.ssgi_unroll_kernel_ ? main_unrolled_kernel_ : main_kernel_;
+        GfxKernel const main_kernel = options_.ssgi_unroll_kernel_ ? main_unrolled_kernel_ : main_kernel_;
 
         uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, main_kernel);
-        uint32_t const  num_groups_x = (buffer_width_ + num_threads[0] - 1) / num_threads[0];
-        uint32_t const  num_groups_y = (buffer_height_ + num_threads[1] - 1) / num_threads[1];
+        uint32_t const  num_groups_x = (render_dimensions.x + num_threads[0] - 1) / num_threads[0];
+        uint32_t const  num_groups_y = (render_dimensions.y + num_threads[1] - 1) / num_threads[1];
 
         gfxCommandBindKernel(gfx_, main_kernel);
         gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
@@ -180,16 +171,15 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
     {
         GfxCommandEvent const command_event(gfx_, "Debug Occlusion");
 
-        gfxProgramSetParameter(
-            gfx_, debug_occlusion_program_, "g_BufferDimensions", glm::int2(buffer_width_, buffer_height_));
+        gfxProgramSetParameter(gfx_, debug_occlusion_program_, "g_BufferDimensions", render_dimensions);
         gfxProgramSetParameter(gfx_, debug_occlusion_program_, "g_OcclusionAndBentNormalBuffer",
-            capsaicin.getAOVBuffer("OcclusionAndBentNormal"));
+            capsaicin.getSharedTexture("OcclusionAndBentNormal"));
         gfxProgramSetParameter(
-            gfx_, debug_occlusion_program_, "g_DebugBuffer", capsaicin.getAOVBuffer("Debug"));
+            gfx_, debug_occlusion_program_, "g_DebugBuffer", capsaicin.getSharedTexture("Debug"));
 
         uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, debug_occlusion_kernel_);
-        uint32_t const  num_groups_x = (buffer_width_ + num_threads[0] - 1) / num_threads[0];
-        uint32_t const  num_groups_y = (buffer_height_ + num_threads[1] - 1) / num_threads[1];
+        uint32_t const  num_groups_x = (render_dimensions.x + num_threads[0] - 1) / num_threads[0];
+        uint32_t const  num_groups_y = (render_dimensions.y + num_threads[1] - 1) / num_threads[1];
 
         gfxCommandBindKernel(gfx_, debug_occlusion_kernel_);
         gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
@@ -198,16 +188,15 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
     {
         GfxCommandEvent const command_event(gfx_, "Debug Bent Normal");
 
-        gfxProgramSetParameter(
-            gfx_, debug_bent_normal_program_, "g_BufferDimensions", glm::int2(buffer_width_, buffer_height_));
+        gfxProgramSetParameter(gfx_, debug_bent_normal_program_, "g_BufferDimensions", render_dimensions);
         gfxProgramSetParameter(gfx_, debug_bent_normal_program_, "g_OcclusionAndBentNormalBuffer",
-            capsaicin.getAOVBuffer("OcclusionAndBentNormal"));
+            capsaicin.getSharedTexture("OcclusionAndBentNormal"));
         gfxProgramSetParameter(
-            gfx_, debug_bent_normal_program_, "g_DebugBuffer", capsaicin.getAOVBuffer("Debug"));
+            gfx_, debug_bent_normal_program_, "g_DebugBuffer", capsaicin.getSharedTexture("Debug"));
 
         uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, debug_bent_normal_kernel_);
-        uint32_t const  num_groups_x = (buffer_width_ + num_threads[0] - 1) / num_threads[0];
-        uint32_t const  num_groups_y = (buffer_height_ + num_threads[1] - 1) / num_threads[1];
+        uint32_t const  num_groups_x = (render_dimensions.x + num_threads[0] - 1) / num_threads[0];
+        uint32_t const  num_groups_y = (render_dimensions.y + num_threads[1] - 1) / num_threads[1];
 
         gfxCommandBindKernel(gfx_, debug_bent_normal_kernel_);
         gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
@@ -220,7 +209,6 @@ void SSGI::render(CapsaicinInternal &capsaicin) noexcept
 void SSGI::terminate() noexcept
 {
     destroyStaticResources();
-    destroyBuffers();
     destroyKernels();
 }
 
@@ -230,55 +218,41 @@ void SSGI::initializeStaticResources([[maybe_unused]] CapsaicinInternal const &c
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 }
 
-void SSGI::initializeBuffers(CapsaicinInternal const &capsaicin)
-{
-    uint32_t buffer_width  = capsaicin.getWidth();
-    uint32_t buffer_height = capsaicin.getHeight();
-
-    buffer_width_  = buffer_width;
-    buffer_height_ = buffer_height;
-}
-
 void SSGI::initializeKernels(CapsaicinInternal const &capsaicin)
 {
-    std::string shader_path = capsaicin.getShaderPath();
-    shader_path += "render_techniques/ssgi";
-
     // Defines
-    std::vector<char const *> global_defines {};
-    std::vector<char const *> unroll_defines {"UNROLL_SLICE_LOOP", "UNROLL_STEP_LOOP"};
+    std::vector<char const *> const global_defines {};
+    std::vector const               unroll_defines {"UNROLL_SLICE_LOOP", "UNROLL_STEP_LOOP"};
 
     // Kernels
-    ssgi_program_ = gfxCreateProgram(gfx_, "ssgi", shader_path.c_str());
+    ssgi_program_ = capsaicin.createProgram("render_techniques/ssgi/ssgi");
     {
         std::vector<char const *> defines;
         defines.insert(defines.cend(), global_defines.cbegin(), global_defines.cend());
-        main_kernel_ =
-            gfxCreateComputeKernel(gfx_, ssgi_program_, "Main", defines.data(), (uint32_t)defines.size());
+        main_kernel_ = gfxCreateComputeKernel(
+            gfx_, ssgi_program_, "Main", defines.data(), static_cast<uint32_t>(defines.size()));
     }
     {
         std::vector<char const *> defines;
         defines.insert(defines.cend(), global_defines.cbegin(), global_defines.cend());
         defines.insert(defines.cend(), unroll_defines.cbegin(), unroll_defines.cend());
-        main_unrolled_kernel_ =
-            gfxCreateComputeKernel(gfx_, ssgi_program_, "Main", defines.data(), (uint32_t)defines.size());
+        main_unrolled_kernel_ = gfxCreateComputeKernel(
+            gfx_, ssgi_program_, "Main", defines.data(), static_cast<uint32_t>(defines.size()));
     }
 
     // Debug kernels
-    debug_occlusion_program_   = gfxCreateProgram(gfx_, "ssgi_debug", shader_path.c_str());
+    debug_occlusion_program_   = capsaicin.createProgram("render_techniques/ssgi/ssgi_debug");
     debug_occlusion_kernel_    = gfxCreateComputeKernel(gfx_, debug_occlusion_program_, "DebugOcclusion");
-    debug_bent_normal_program_ = gfxCreateProgram(gfx_, "ssgi_debug", shader_path.c_str());
+    debug_bent_normal_program_ = capsaicin.createProgram("render_techniques/ssgi/ssgi_debug");
     debug_bent_normal_kernel_  = gfxCreateComputeKernel(gfx_, debug_bent_normal_program_, "DebugBentNormal");
 }
 
-void SSGI::destroyStaticResources()
+void SSGI::destroyStaticResources() const
 {
     gfxDestroySamplerState(gfx_, point_sampler_);
 }
 
-void SSGI::destroyBuffers() {}
-
-void SSGI::destroyKernels()
+void SSGI::destroyKernels() const
 {
     // Kernels
     gfxDestroyProgram(gfx_, ssgi_program_);

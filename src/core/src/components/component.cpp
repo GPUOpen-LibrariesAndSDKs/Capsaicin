@@ -38,7 +38,17 @@ ComponentList Component::getComponents() const noexcept
     return {};
 }
 
-BufferList Component::getBuffers() const noexcept
+SharedBufferList Component::getSharedBuffers() const noexcept
+{
+    return {};
+}
+
+SharedTextureList Component::getSharedTextures() const noexcept
+{
+    return {};
+}
+
+DebugViewList Component::getDebugViews() const noexcept
 {
     return {};
 }

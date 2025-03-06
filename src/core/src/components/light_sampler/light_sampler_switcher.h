@@ -23,26 +23,26 @@ THE SOFTWARE.
 
 #include "capsaicin_internal.h"
 #include "components/light_sampler/light_sampler.h"
-#include "render_technique.h"
 
 namespace Capsaicin
 {
-class LightSamplerSwitcher
+class LightSamplerSwitcher final
     : public Component
-    , public ComponentFactory::Registrar<LightSamplerSwitcher>
+    , ComponentFactory::Registrar<LightSamplerSwitcher>
 {
 public:
     static constexpr std::string_view Name = "LightSamplerSwitcher";
-
-    LightSamplerSwitcher(LightSamplerSwitcher const &) noexcept = delete;
-
-    LightSamplerSwitcher(LightSamplerSwitcher &&) noexcept = default;
 
     /** Constructor. */
     LightSamplerSwitcher() noexcept;
 
     /** Destructor. */
-    ~LightSamplerSwitcher() noexcept;
+    ~LightSamplerSwitcher() noexcept override;
+
+    LightSamplerSwitcher(LightSamplerSwitcher const &other)                = delete;
+    LightSamplerSwitcher(LightSamplerSwitcher &&other) noexcept            = delete;
+    LightSamplerSwitcher &operator=(LightSamplerSwitcher const &other)     = delete;
+    LightSamplerSwitcher &operator=(LightSamplerSwitcher &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -58,7 +58,7 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -66,7 +66,25 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
+
+    /**
+     * Gets a list of any shared buffers used by the current component.
+     * @return A list of all supported buffers.
+     */
+    [[nodiscard]] SharedBufferList getSharedBuffers() const noexcept override;
+
+    /**
+     * Gets the required list of shared textures needed for the current component.
+     * @return A list of all required shared textures.
+     */
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
+
+    /**
+     * Gets a list of any debug views provided by the current render technique.
+     * @return A list of all supported debug views.
+     */
+    [[nodiscard]] DebugViewList getDebugViews() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -100,40 +118,41 @@ public:
      * @param capsaicin Current framework context.
      * @return True if an update occurred requiring internal updates to be performed.
      */
-    bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept;
+    [[nodiscard]] bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
      * @param capsaicin Current framework context.
      * @return A vector with each required define.
      */
-    std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept;
+    [[nodiscard]] std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept;
 
     /**
      * Add the required program parameters to a shader based on current settings.
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
     /**
-     * Check if the scenes lighting data was changed this frame.
+     * Check if the light settings have changed (i.e. enabled/disabled lights).
      * @param capsaicin Current framework context.
-     * @returns True if light data has changed.
+     * @return True if light settings have changed.
      */
-    bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept;
+    [[nodiscard]] bool getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept;
 
     /**
      * Gets number of timestamp queries.
-     * @returns The timestamp query count.
+     * @return The timestamp query count.
      */
-    uint32_t getTimestampQueryCount() const noexcept override;
+    [[nodiscard]] uint32_t getTimestampQueryCount() const noexcept override;
 
     /**
      * Gets timestamp queries.
-     * @returns The timestamp queries.
+     * @return The timestamp queries.
      */
-    std::vector<TimestampQuery> const &getTimestampQueries() const noexcept override;
+    [[nodiscard]] std::vector<TimestampQuery> const &getTimestampQueries() const noexcept override;
 
     /** Resets the timed section queries */
     void resetQueries() noexcept override;

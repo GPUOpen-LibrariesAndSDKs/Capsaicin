@@ -25,21 +25,22 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class PrefilterIBL
+class PrefilterIBL final
     : public Component
-    , public ComponentFactory::Registrar<PrefilterIBL>
+    , ComponentFactory::Registrar<PrefilterIBL>
 {
 public:
     static constexpr std::string_view Name = "PrefilterIBL";
 
-    PrefilterIBL(PrefilterIBL const &) noexcept = delete;
-
-    PrefilterIBL(PrefilterIBL &&) noexcept = default;
-
     /** Constructor. */
     PrefilterIBL() noexcept;
 
-    ~PrefilterIBL() noexcept;
+    ~PrefilterIBL() noexcept override;
+
+    PrefilterIBL(PrefilterIBL const &other)                = delete;
+    PrefilterIBL(PrefilterIBL &&other) noexcept            = delete;
+    PrefilterIBL &operator=(PrefilterIBL const &other)     = delete;
+    PrefilterIBL &operator=(PrefilterIBL &&other) noexcept = delete;
 
     /**
      * Initialise any internal data or state.
@@ -67,10 +68,10 @@ public:
      * @param program   The shader program to bind parameters to.
      */
 
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
 private:
-    void prefilterIBL(CapsaicinInternal const &capsaicin) noexcept;
+    void prefilterIBL(CapsaicinInternal const &capsaicin) const noexcept;
 
     GfxProgram prefilter_ibl_program_;
     GfxTexture prefilter_ibl_buffer_;

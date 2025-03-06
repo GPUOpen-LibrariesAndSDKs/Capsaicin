@@ -32,7 +32,12 @@ class ReferencePT : public RenderTechnique
 {
 public:
     ReferencePT();
-    ~ReferencePT();
+    ~ReferencePT() override;
+
+    ReferencePT(ReferencePT const &other)                = delete;
+    ReferencePT(ReferencePT &&other) noexcept            = delete;
+    ReferencePT &operator=(ReferencePT const &other)     = delete;
+    ReferencePT &operator=(ReferencePT &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -52,17 +57,18 @@ public:
             false; /**< Disable sampling direct lighting on first intersection */
         bool reference_pt_disable_specular_materials =
             false; /**< Disable specular sampling/evaluation essentially setting materials to diffuse only */
+        bool reference_pt_disable_alpha_testing =
+            false; /**< Disable testing material alpha - treats all surfaces as opaque */
         bool reference_pt_nee_only    = false; /**< Disable light contributions from source other than NEE */
         bool reference_pt_disable_nee = false; /**< Disable light contributions from Next Event Estimation */
-        bool reference_pt_nee_reservoir_resampling =
-            false;                           /**< Use reservoir resampling for selecting NEE light samples */
-        bool reference_pt_use_dxr10 = false; /**< Use dxr 1.0 ray-tracing pipelines instead of inline rt */
+        bool reference_pt_use_dxr10   = false; /**< Use dxr 1.0 ray-tracing pipelines instead of inline rt */
+        bool reference_pt_accumulate  = true;  /**< Enable accumulation of frames */
     };
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -70,13 +76,13 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -113,21 +119,15 @@ protected:
     bool initKernels(CapsaicinInternal const &capsaicin) noexcept;
 
     /**
-     * Check if camera has changed.
-     * @param currentCamera The current camera.
-     * @return True if camera has changed, False otherwise.
-     */
-    bool checkCameraUpdated(GfxCamera const &currentCamera) noexcept;
-
-    /**
      * Check if kernels needs to be recompiled.
      * @param capsaicin The current capsaicin context.
      * @param newOptions New render options.
      * @return True if kernels needs to be recompiled, False otherwise.
      */
-    virtual bool needsRecompile(CapsaicinInternal &capsaicin, RenderOptions const &newOptions) noexcept;
+    [[nodiscard]] virtual bool needsRecompile(
+        CapsaicinInternal const &capsaicin, RenderOptions const &newOptions) const noexcept;
 
-    virtual void setupSbt(CapsaicinInternal &capsaicin) noexcept;
+    virtual void setupSbt(CapsaicinInternal const &capsaicin) const noexcept;
 
     virtual void setupPTKernel(CapsaicinInternal const &capsaicin,
         std::vector<GfxLocalRootSignatureAssociation>  &local_root_signature_associations,
@@ -139,8 +139,6 @@ protected:
     GfxBuffer  rayCameraData;
     GfxTexture accumulationBuffer; /**< Buffer used to store pixel running average, .w= number of samples */
     RayCamera  cameraData;
-    uint2      bufferDimensions = uint2(0);
-    GfxCamera  camera           = {};
     RenderOptions options;
 
     GfxProgram reference_pt_program_;

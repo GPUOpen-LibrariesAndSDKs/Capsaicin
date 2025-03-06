@@ -27,9 +27,7 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-/** Constructor. */
-
-inline BlueNoiseSampler::BlueNoiseSampler() noexcept
+BlueNoiseSampler::BlueNoiseSampler() noexcept
     : Component(Name)
 {}
 
@@ -59,7 +57,7 @@ void BlueNoiseSampler::terminate() noexcept
 }
 
 void BlueNoiseSampler::addProgramParameters(
-    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_SobolBuffer", sobolBuffer);
     gfxProgramSetParameter(gfx_, program, "g_RankingTile", rankingTileBuffer);

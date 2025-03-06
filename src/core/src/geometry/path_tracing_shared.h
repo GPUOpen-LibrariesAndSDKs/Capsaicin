@@ -55,12 +55,11 @@ struct Camera
 
 /*
  * Converts a camera description to corresponding ray generation camera format.
- * @param camera The camera to convert.
- * @param width  The screen width.
- * @param height The screen height.
- * @returns The created ray camera.
+ * @param camera     The camera to convert.
+ * @param dimensions The screen width and height.
+ * @return The created ray camera.
  */
-static inline RayCamera caclulateRayCamera(Camera camera, uint32_t width, uint32_t height)
+inline static RayCamera caclulateRayCamera(Camera camera, uint2 dimensions)
 {
     float3 origin = camera.origin;
     float2 range  = float2(camera.nearZ, camera.farZ);
@@ -102,8 +101,8 @@ static inline RayCamera caclulateRayCamera(Camera camera, uint32_t width, uint32
     directionY += directionY;
 
     // Scale the X and Y vectors to be pixel length
-    directionX /= (float)width;
-    directionY /= (float)height;
+    directionX /= (float)dimensions.x;
+    directionY /= (float)dimensions.y;
 
     RayCamera ret = {origin, directionTL, directionX, directionY, range};
     return ret;

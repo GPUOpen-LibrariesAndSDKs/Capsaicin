@@ -48,111 +48,89 @@ TAA::RenderOptions TAA::convertOptions(RenderOptionList const &options) noexcept
     return newOptions;
 }
 
-AOVList TAA::getAOVs() const noexcept
+SharedTextureList TAA::getSharedTextures() const noexcept
 {
-    AOVList aovs;
-    aovs.push_back({"Color", AOV::Write});
+    SharedTextureList textures;
+    textures.push_back({"Color", SharedTexture::Access::ReadWrite});
 
-    aovs.push_back({"VisibilityDepth"});
-    aovs.push_back({"Velocity"});
-    aovs.push_back({.name = "DirectLighting", .flags = AOV::Optional});
-    aovs.push_back({.name = "GlobalIllumination", .flags = AOV::Optional});
-    return aovs;
+    textures.push_back({"VisibilityDepth"});
+    textures.push_back({"Velocity"});
+    return textures;
 }
 
 bool TAA::init(CapsaicinInternal const &capsaicin) noexcept
 {
     std::vector<char const *> defines;
-    if (capsaicin.hasAOVBuffer("DirectLighting"))
+    if (capsaicin.hasSharedTexture("DirectLighting"))
     {
         defines.push_back("HAS_DIRECT_LIGHTING_BUFFER");
     }
-    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
+    if (capsaicin.hasSharedTexture("GlobalIllumination"))
     {
         defines.push_back("HAS_GLOBAL_ILLUMINATION_BUFFER");
     }
-    taa_program_             = gfxCreateProgram(gfx_, "render_techniques/taa/taa", capsaicin.getShaderPath());
+    taa_program_             = capsaicin.createProgram("render_techniques/taa/taa");
     resolve_temporal_kernel_ = gfxCreateComputeKernel(
-        gfx_, taa_program_, "ResolveTemporal", defines.data(), (uint32_t)defines.size());
-    resolve_passthru_kernel_ = gfxCreateComputeKernel(
-        gfx_, taa_program_, "ResolvePassthru", defines.data(), (uint32_t)defines.size());
+        gfx_, taa_program_, "ResolveTemporal", defines.data(), static_cast<uint32_t>(defines.size()));
     update_history_kernel_ = gfxCreateComputeKernel(gfx_, taa_program_, "UpdateHistory");
+
+    uint32_t index = 0;
+    for (GfxTexture &color_buffer : color_buffers_)
+    {
+        char buffer[64];
+        GFX_SNPRINTF(buffer, sizeof(buffer), "ColorBuffer%u", index);
+        color_buffer = capsaicin.createRenderTexture(DXGI_FORMAT_R16G16B16A16_FLOAT, buffer);
+        ++index;
+    }
     return !!taa_program_;
 }
 
 void TAA::render(CapsaicinInternal &capsaicin) noexcept
 {
-    // Make sure our color buffers are properly created
-    uint32_t const buffer_width  = capsaicin.getWidth();
-    uint32_t const buffer_height = capsaicin.getHeight();
+    auto const newOptions   = convertOptions(capsaicin.getOptions());
+    bool const optionChange = newOptions.taa_enable != options.taa_enable;
+    options                 = newOptions;
 
-    bool not_cleared_history = true;
-    if (buffer_width != color_buffers_->getWidth() || buffer_height != color_buffers_->getHeight())
+    if (options.taa_enable)
     {
-        for (GfxTexture &color_buffer : color_buffers_)
-            gfxDestroyTexture(gfx_, color_buffer);
-
-        for (uint32_t i = 0; i < ARRAYSIZE(color_buffers_); ++i)
+        // Make sure our color buffers are properly created (a resize may have occured while TAA was disabled
+        // so we need to check the buffer resolution directly)
+        bool       not_cleared_history = !optionChange;
+        auto const dimensions          = capsaicin.getRenderDimensions();
+        if (uint2(color_buffers_[0].getWidth(), color_buffers_[0].getHeight()) != dimensions)
         {
-            char buffer[64];
-            GFX_SNPRINTF(buffer, sizeof(buffer), "Capsaicin_ColorBuffer%u", i);
+            for (GfxTexture &color_buffer : color_buffers_)
+            {
+                color_buffer = capsaicin.resizeRenderTexture(color_buffer);
+            }
 
-            color_buffers_[i] =
-                gfxCreateTexture2D(gfx_, buffer_width, buffer_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
-            color_buffers_[i].setName(buffer);
-
-            gfxCommandClearTexture(gfx_, color_buffers_[i]);
+            not_cleared_history = false;
         }
 
-        not_cleared_history = false;
-    }
-
-    // Bind the shader parameters
-    uint32_t const buffer_dimensions[] = {buffer_width, buffer_height};
-
-    options = convertOptions(capsaicin.getOptions());
-
-    gfxProgramSetParameter(
-        gfx_, taa_program_, "g_HaveHistory", not_cleared_history && capsaicin.getFrameIndex() > 0);
-    gfxProgramSetParameter(gfx_, taa_program_, "g_BufferDimensions", buffer_dimensions);
-
-    gfxProgramSetParameter(gfx_, taa_program_, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
-    gfxProgramSetParameter(gfx_, taa_program_, "g_VelocityBuffer", capsaicin.getAOVBuffer("Velocity"));
-
-    gfxProgramSetParameter(gfx_, taa_program_, "g_ColorBuffer", capsaicin.getAOVBuffer("Color"));
-    if (capsaicin.hasAOVBuffer("DirectLighting"))
-    {
+        // Bind the shader parameters
         gfxProgramSetParameter(
-            gfx_, taa_program_, "g_DirectLightingBuffer", capsaicin.getAOVBuffer("DirectLighting"));
-    }
-    if (capsaicin.hasAOVBuffer("GlobalIllumination"))
-    {
+            gfx_, taa_program_, "g_HaveHistory", not_cleared_history && capsaicin.getFrameIndex() > 0);
+        gfxProgramSetParameter(gfx_, taa_program_, "g_BufferDimensions", dimensions);
+
         gfxProgramSetParameter(
-            gfx_, taa_program_, "g_GlobalIlluminationBuffer", capsaicin.getAOVBuffer("GlobalIllumination"));
-    }
+            gfx_, taa_program_, "g_DepthBuffer", capsaicin.getSharedTexture("VisibilityDepth"));
+        gfxProgramSetParameter(
+            gfx_, taa_program_, "g_VelocityBuffer", capsaicin.getSharedTexture("Velocity"));
+        auto const &colorTexture = capsaicin.getSharedTexture("Color");
+        gfxProgramSetParameter(gfx_, taa_program_, "g_ColorInBuffer", colorTexture);
 
-    gfxProgramSetParameter(gfx_, taa_program_, "g_LinearSampler", capsaicin.getLinearSampler());
-    gfxProgramSetParameter(gfx_, taa_program_, "g_NearestSampler", capsaicin.getNearestSampler());
+        gfxProgramSetParameter(gfx_, taa_program_, "g_ColorBuffer", colorTexture);
 
-    // If TAA is not enabled, simply pass through
-    if (!options.taa_enable)
-    {
-        uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, resolve_passthru_kernel_);
-        uint32_t const  num_groups_x = (buffer_width + num_threads[0] - 1) / num_threads[0];
-        uint32_t const  num_groups_y = (buffer_height + num_threads[1] - 1) / num_threads[1];
+        gfxProgramSetParameter(gfx_, taa_program_, "g_LinearSampler", capsaicin.getLinearSampler());
+        gfxProgramSetParameter(gfx_, taa_program_, "g_NearestSampler", capsaicin.getNearestSampler());
 
-        gfxCommandBindKernel(gfx_, resolve_passthru_kernel_);
-        gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
-    }
-    else
-    {
         // Perform the temporal resolve
         {
             TimedSection const timed_section(*this, "ResolveTemporal");
 
             uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, resolve_temporal_kernel_);
-            uint32_t const  num_groups_x = (buffer_width + num_threads[0] - 1) / num_threads[0];
-            uint32_t const  num_groups_y = (buffer_height + num_threads[1] - 1) / num_threads[1];
+            uint32_t const  num_groups_x = (dimensions.x + num_threads[0] - 1) / num_threads[0];
+            uint32_t const  num_groups_y = (dimensions.y + num_threads[1] - 1) / num_threads[1];
 
             gfxProgramSetParameter(gfx_, taa_program_, "g_OutputBuffer", color_buffers_[0]);
             gfxProgramSetParameter(gfx_, taa_program_, "g_HistoryBuffer", color_buffers_[1]);
@@ -166,8 +144,8 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
             TimedSection const timed_section(*this, "UpdateHistory");
 
             uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, update_history_kernel_);
-            uint32_t const  num_groups_x = (buffer_width + num_threads[0] - 1) / num_threads[0];
-            uint32_t const  num_groups_y = (buffer_height + num_threads[1] - 1) / num_threads[1];
+            uint32_t const  num_groups_x = (dimensions.x + num_threads[0] - 1) / num_threads[0];
+            uint32_t const  num_groups_y = (dimensions.y + num_threads[1] - 1) / num_threads[1];
 
             gfxProgramSetParameter(gfx_, taa_program_, "g_OutputBuffer", color_buffers_[1]);
             gfxProgramSetParameter(gfx_, taa_program_, "g_HistoryBuffer", color_buffers_[0]);
@@ -180,12 +158,13 @@ void TAA::render(CapsaicinInternal &capsaicin) noexcept
 
 void TAA::terminate() noexcept
 {
-    for (GfxTexture &color_buffer : color_buffers_)
+    for (GfxTexture const &color_buffer : color_buffers_)
+    {
         gfxDestroyTexture(gfx_, color_buffer);
+    }
 
     gfxDestroyProgram(gfx_, taa_program_);
     gfxDestroyKernel(gfx_, resolve_temporal_kernel_);
-    gfxDestroyKernel(gfx_, resolve_passthru_kernel_);
     gfxDestroyKernel(gfx_, update_history_kernel_);
 
     memset(color_buffers_, 0, sizeof(color_buffers_));

@@ -31,8 +31,8 @@ GPUReduce::~GPUReduce() noexcept
     terminate();
 }
 
-bool GPUReduce::initialise(
-    GfxContext gfxIn, std::string_view const &shaderPath, Type type, Operation operation) noexcept
+bool GPUReduce::initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths,
+    Type const type, Operation const operation) noexcept
 {
     gfx = gfxIn;
 
@@ -70,7 +70,15 @@ bool GPUReduce::initialise(
         gfxDestroyKernel(gfx, reduceKernel);
         gfxDestroyKernel(gfx, reduceIndirectKernel);
         gfxDestroyKernel(gfx, dispatchIndirectKernel);
-        reduceProgram = gfxCreateProgram(gfx, "utilities/gpu_reduce", shaderPath.data());
+
+        std::vector<char const *> includePaths;
+        includePaths.reserve(shaderPaths.size());
+        for (auto const &path : shaderPaths)
+        {
+            includePaths.push_back(path.c_str());
+        }
+        reduceProgram = gfxCreateProgram(gfx, "utilities/gpu_reduce", includePaths[0], nullptr,
+            includePaths.data(), static_cast<uint32_t>(includePaths.size()));
         std::vector<char const *> baseDefines;
         switch (currentType)
         {
@@ -86,7 +94,7 @@ bool GPUReduce::initialise(
         case Type::Int2: baseDefines.push_back("TYPE=int2"); break;
         case Type::Int3: baseDefines.push_back("TYPE=int3"); break;
         case Type::Int4: baseDefines.push_back("TYPE=int4"); break;
-        case Type::Double:  baseDefines.push_back("TYPE=double"); break;
+        case Type::Double: baseDefines.push_back("TYPE=double"); break;
         case Type::Double2: baseDefines.push_back("TYPE=double2"); break;
         case Type::Double3: baseDefines.push_back("TYPE=double3"); break;
         case Type::Double4: baseDefines.push_back("TYPE=double4"); break;
@@ -110,9 +118,10 @@ bool GPUReduce::initialise(
     return !!dispatchIndirectKernel;
 }
 
-bool GPUReduce::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+bool GPUReduce::initialise(
+    CapsaicinInternal const &capsaicin, Type const type, Operation const operation) noexcept
 {
-    return initialise(capsaicin.getGfx(), capsaicin.getShaderPath(), type, operation);
+    return initialise(capsaicin.getGfx(), capsaicin.getShaderPaths(), type, operation);
 }
 
 void GPUReduce::terminate() noexcept
@@ -139,29 +148,29 @@ void GPUReduce::terminate() noexcept
 }
 
 bool GPUReduce::reduceIndirect(
-    GfxBuffer const &sourceBuffer, GfxBuffer const &numKeys, const uint maxNumKeys) noexcept
+    GfxBuffer const &sourceBuffer, GfxBuffer const &numKeys, uint const maxNumKeys) noexcept
 {
     return reduceInternal(sourceBuffer, maxNumKeys, &numKeys);
 }
 
-bool GPUReduce::reduce(GfxBuffer const &sourceBuffer, const uint numKeys) noexcept
+bool GPUReduce::reduce(GfxBuffer const &sourceBuffer, uint const numKeys) noexcept
 {
     return reduceInternal(sourceBuffer, numKeys);
 }
 
 bool GPUReduce::reduceInternal(
-    GfxBuffer const &sourceBuffer, const uint maxNumKeys, GfxBuffer const *numKeys) noexcept
+    GfxBuffer const &sourceBuffer, uint const maxNumKeys, GfxBuffer const *numKeys) noexcept
 {
     // Check if indirect
-    bool indirect = (numKeys != nullptr);
+    bool const indirect = (numKeys != nullptr);
 
     // Calculate number of loops
     uint32_t const *numThreads    = gfxKernelGetNumThreads(gfx, reduceKernel);
-    const uint      groupSize     = numThreads[0];
-    const uint      keysPerThread = 4; // Must match KEYS_PER_THREAD in shader
-    const uint      keysPerGroup  = groupSize * keysPerThread;
-    const uint32_t  numGroups1    = (maxNumKeys + keysPerGroup - 1) / keysPerGroup;
-    const uint32_t  numGroups2    = (numGroups1 + keysPerGroup - 1) / keysPerGroup;
+    uint const      groupSize     = numThreads[0];
+    constexpr uint  keysPerThread = 4; // Must match KEYS_PER_THREAD in shader
+    uint const      keysPerGroup  = groupSize * keysPerThread;
+    uint32_t const  numGroups1    = (maxNumKeys + keysPerGroup - 1) / keysPerGroup;
+    uint32_t const  numGroups2    = (numGroups1 + keysPerGroup - 1) / keysPerGroup;
     if (numGroups2 > numThreads[0])
     {
         // To many keys as we only support 2 loops
@@ -197,8 +206,9 @@ bool GPUReduce::reduceInternal(
     if (numGroups1 > 1)
     {
         // Create scratch buffer needed for loops
-        const uint64_t typeSize = (((uint64_t)currentType % 4) + 1) * (currentType >= Type::Double ? sizeof(double) : sizeof(float));
-        const uint64_t scratchBufferSize = numGroups1 * typeSize;
+        uint64_t const typeSize = ((static_cast<uint64_t>(currentType) % 4) + 1)
+                                * (currentType >= Type::Double ? sizeof(double) : sizeof(float));
+        uint64_t const scratchBufferSize = numGroups1 * typeSize;
         if (!scratchBuffer || (scratchBuffer.getSize() < scratchBufferSize))
         {
             gfxDestroyBuffer(gfx, scratchBuffer);
@@ -208,28 +218,25 @@ bool GPUReduce::reduceInternal(
         }
 
         gfxProgramSetParameter(gfx, reduceProgram, "g_OutputBuffer", scratchBuffer);
-        if (numGroups1 > 1)
+        // Run first loop
+        if (indirect)
         {
-            // Run first loop
-            if (indirect)
-            {
-                gfxCommandDispatchIndirect(gfx, indirectBuffer);
-            }
-            else
-            {
-                gfxCommandDispatch(gfx, numGroups1, 1, 1);
-            }
-            // Setup parameters for next loop
-            gfxProgramSetParameter(gfx, reduceProgram, "g_InputBuffer", scratchBuffer);
-            gfxProgramSetParameter(gfx, reduceProgram, "g_OutputBuffer", sourceBuffer);
-            if (indirect)
-            {
-                gfxProgramSetParameter(gfx, reduceProgram, "g_InputLength", indirectCountBuffer);
-            }
-            else
-            {
-                gfxProgramSetParameter(gfx, reduceProgram, "g_Count", numGroups1);
-            }
+            gfxCommandDispatchIndirect(gfx, indirectBuffer);
+        }
+        else
+        {
+            gfxCommandDispatch(gfx, numGroups1, 1, 1);
+        }
+        // Setup parameters for next loop
+        gfxProgramSetParameter(gfx, reduceProgram, "g_InputBuffer", scratchBuffer);
+        gfxProgramSetParameter(gfx, reduceProgram, "g_OutputBuffer", sourceBuffer);
+        if (indirect)
+        {
+            gfxProgramSetParameter(gfx, reduceProgram, "g_InputLength", indirectCountBuffer);
+        }
+        else
+        {
+            gfxProgramSetParameter(gfx, reduceProgram, "g_Count", numGroups1);
         }
         if (numGroups2 > 1)
         {

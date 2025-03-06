@@ -24,8 +24,8 @@ THE SOFTWARE.
 #define LIGHT_SAMPLING_VOLUME_HLSL
 
 #include "light_evaluation.hlsl"
-#include "../geometry/geometry.hlsl"
-#include "../math/color.hlsl"
+#include "geometry/geometry.hlsl"
+#include "math/color.hlsl"
 
 /*
 // Requires the following data to be defined in any shader that uses this file
@@ -637,7 +637,7 @@ float sampleLightPoint(Light selectedLight, float3 position)
         float lightLengthSqr = lengthSqr(lightVector);
         lightVector *= rsqrt(lightLengthSqr).xxx;
         float pdf = saturate(abs(dot(lightNormal, lightVector))) * lightArea;
-        pdf = pdf / (lightLengthSqr + FLT_EPSILON);
+        pdf = (lightLengthSqr != 0.0F) ? pdf / lightLengthSqr : 0.0f;
         radiance = emissivity * pdf;
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
@@ -752,8 +752,18 @@ float sampleLightPointNormal(Light selectedLight, float3 position, float3 normal
         float lightLengthSqr = lengthSqr(lightVector);
         lightVector *= rsqrt(lightLengthSqr).xxx;
         float pdf = saturate(abs(dot(lightNormal, lightVector))) * lightArea;
-        pdf = pdf / (lightLengthSqr + FLT_EPSILON);
-        radiance = emissivity * pdf * saturate(-dot(lightVector, normal));
+        pdf = (lightLengthSqr != 0.0F) ? pdf / lightLengthSqr : 0.0f;
+        radiance = emissivity * pdf;
+
+        // Evaluate the angle to the light, as the light may be partially behind the current surface
+        //   we need to check multiple points to ensure we don't incorrectly cull the light.
+        float3 lightVector0 = normalize(light.v0 - position);
+        float3 lightVector1 = normalize(light.v1 - position);
+        float3 lightVector2 = normalize(light.v2 - position);
+
+        // Evaluate light angle at specified points
+        float angles = saturate(dot(lightVector0, normal)) + saturate(dot(lightVector1, normal)) + saturate(dot(lightVector2, normal));
+        radiance *= angles / 3.0f;
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
@@ -814,7 +824,7 @@ float sampleLightPointNormal(Light selectedLight, float3 position, float3 normal
             radiance += g_EnvironmentBuffer.SampleLevel(g_TextureSampler, float3(normal.x, 0.0f, 0.0f), light.lods).xyz;
             ++count;
         }
-        radiance *= TWO_PI / count;
+        radiance /= count;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
     return luminance(radiance);
@@ -845,12 +855,15 @@ float sampleLightPointNormalFast(Light selectedLight, float3 position, float3 no
         // Get the area light
         LightArea light = MakeLightArea(selectedLight);
 
-        // Get light position at approximate midpoint
-        float3 lightPosition = interpolate(light.v0, light.v1, light.v2, (1.0f / 3.0f).xx);
+        // Evaluate the angle to the light, as the light may be partially behind the current surface
+        //   we need to check multiple points to ensure we don't incorrectly cull the light.
+        float3 lightVector0 = normalize(light.v0 - position);
+        float3 lightVector1 = normalize(light.v1 - position);
+        float3 lightVector2 = normalize(light.v2 - position);
 
-        // Evaluate radiance at specified point
-        float3 lightVector = normalize(lightPosition - position);
-        return saturate(dot(lightVector, normal));
+        // Evaluate light angle at specified points
+        float angles = saturate(dot(lightVector0, normal)) + saturate(dot(lightVector1, normal)) + saturate(dot(lightVector2, normal));
+        return angles / 3.0f;
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
@@ -887,7 +900,7 @@ float sampleLightPointNormalFast(Light selectedLight, float3 position, float3 no
         // Get the environment light
         LightEnvironment light = MakeLightEnvironment(selectedLight);
 
-        return 1.0f;
+        return INV_PI;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif

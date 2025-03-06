@@ -23,9 +23,9 @@ THE SOFTWARE.
 
 #include "capsaicin_export.h"
 
+#include <filesystem>
 #include <gfx_imgui.h>
-#include <gfx_scene.h>
-
+#include <glm/glm.hpp>
 #include <map>
 #include <string_view>
 #include <variant>
@@ -37,100 +37,147 @@ namespace Capsaicin
  * @param gfx The gfx context to use inside Capsaicin.
  * @param imgui_context (Optional) The ImGui context.
  */
-CAPSAICIN_EXPORT void Initialize(GfxContext gfx, ImGuiContext *imgui_context = nullptr) noexcept;
+CAPSAICIN_EXPORT void Initialize(GfxContext const &gfx, ImGuiContext *imgui_context = nullptr) noexcept;
 
 /**
  * Gets the list of supported renderers.
- * @returns The renderers list.
+ * @return The renderers list.
  */
 CAPSAICIN_EXPORT std::vector<std::string_view> GetRenderers() noexcept;
 
 /**
  * Gets the currently set renderer.
- * @returns The current renderer name.
+ * @return The current renderer name.
  */
 CAPSAICIN_EXPORT std::string_view GetCurrentRenderer() noexcept;
 
 /**
  * Sets the current renderer.
  * @param name The name of the renderer to set (must be one of the options from GetRenderers()).
- * @returns True if successful, False otherwise.
+ * @return True if successful, False otherwise.
  */
 CAPSAICIN_EXPORT bool SetRenderer(std::string_view const &name) noexcept;
 
 /**
  * Gets the currently set scenes.
- * @returns The current scene name.
+ * @return The current scene name.
  */
-CAPSAICIN_EXPORT std::vector<std::string> GetCurrentScenes() noexcept;
+CAPSAICIN_EXPORT std::vector<std::filesystem::path> GetCurrentScenes() noexcept;
 
 /**
- * Sets the current scenes.
- * @param name The name of the scene file.
- * @returns True if successful, False otherwise.
+ * Sets the current scene and replaces any existing scene(s).
+ * @param fileName The name of the scene file.
+ * @return True if successful, False otherwise.
  */
-CAPSAICIN_EXPORT bool SetScenes(std::vector<std::string> const &names) noexcept;
+CAPSAICIN_EXPORT bool SetScene(std::filesystem::path const &fileName) noexcept;
+
+/**
+ * Append the contents of a scene file to the existing scene(s).
+ * @param fileName The name of the scene file.
+ * @return True if successful, False otherwise.
+ */
+CAPSAICIN_EXPORT bool AppendScene(std::filesystem::path const &fileName) noexcept;
 
 /**
  * Gets the list of cameras available in the current scene.
- * @returns The cameras list.
+ * @return The cameras list.
  */
 CAPSAICIN_EXPORT std::vector<std::string_view> GetSceneCameras() noexcept;
 
 /**
  * Gets the name of the currently set scene camera.
- * @returns The current camera name.
+ * @return The current camera name.
  */
 CAPSAICIN_EXPORT std::string_view GetSceneCurrentCamera() noexcept;
 
+struct CameraView
+{
+    glm::vec3 position;
+    glm::vec3 forward;
+    glm::vec3 up;
+};
+
 /**
- * Gets the current scenes camera.
- * @returns The requested camera object.
+ * Gets the current scenes active cameras view data.
+ * @return The requested camera data [position, forward, up].
  */
-CAPSAICIN_EXPORT GfxRef<GfxCamera> GetSceneCamera() noexcept;
+CAPSAICIN_EXPORT CameraView GetSceneCameraView() noexcept;
+
+/**
+ * Gets the current scenes active camera vertical Field Of View.
+ * @return The requested camera FOVY.
+ */
+CAPSAICIN_EXPORT float GetSceneCameraFOV() noexcept;
+
+/**
+ * Gets the current scenes active camera near and far Z range.
+ * @return The requested camera range.
+ */
+CAPSAICIN_EXPORT glm::vec2 GetSceneCameraRange() noexcept;
 
 /**
  * Sets the current scenes camera.
  * @param name The name of the camera to set (must be one of the options from GetSceneCameras()).
- * @returns True if successful, False otherwise.
+ * @return True if successful, False otherwise.
  */
 CAPSAICIN_EXPORT bool SetSceneCamera(std::string_view const &name) noexcept;
 
 /**
- * Gets the currently set environment map.
- * @returns The current environment map name.
+ * Sets the currently active cameras view data.
+ * @param position The new camera position.
+ * @param forward  The new camera forward direction vector.
+ * @param up       The new camera up direction vector.
  */
-CAPSAICIN_EXPORT std::string GetCurrentEnvironmentMap() noexcept;
+CAPSAICIN_EXPORT void SetSceneCameraView(
+    glm::vec3 const &position, glm::vec3 const &forward, glm::vec3 const &up) noexcept;
+
+/**
+ * Sets the currently active cameras vertical Field Of View.
+ * @param FOVY The vertical filed of view angle.
+ */
+CAPSAICIN_EXPORT void SetSceneCameraFOV(float FOVY) noexcept;
+
+/**
+ * Sets the currently active cameras near and far Z range.
+ * @param nearFar The near and far Z distances.
+ */
+CAPSAICIN_EXPORT void SetSceneCameraRange(glm::vec2 const &nearFar) noexcept;
+
+/**
+ * Gets the currently set environment map.
+ * @return The current environment map name.
+ */
+CAPSAICIN_EXPORT std::filesystem::path GetCurrentEnvironmentMap() noexcept;
 
 /**
  * Sets the current scene environment map.
- * @param name The name of the image file (blank to disable environment map).
- * @returns True if successful, False otherwise.
+ * @param fileName The name of the image file (blank to disable environment map).
+ * @return True if successful, False otherwise.
  */
-CAPSAICIN_EXPORT bool SetEnvironmentMap(std::string const &name) noexcept;
+CAPSAICIN_EXPORT bool SetEnvironmentMap(std::filesystem::path const &fileName) noexcept;
 
 /**
  * Gets the list of currently available debug views.
- * @returns The debug view list.
+ * @return The debug view list.
  */
 CAPSAICIN_EXPORT std::vector<std::string_view> GetDebugViews() noexcept;
 
 /**
  * Gets the currently set debug view.
- * @returns The current debug view name.
+ * @return The current debug view name.
  */
 CAPSAICIN_EXPORT std::string_view GetCurrentDebugView() noexcept;
 
 /**
  * Sets the current debug view.
  * @param name The name of the debug view to set (must be one of the options from GetDebugViews()).
- * @returns True if successful, False otherwise.
+ * @return True if successful, False otherwise.
  */
 CAPSAICIN_EXPORT bool SetDebugView(std::string_view const &name) noexcept;
 
 /**
  * Gets the list of currently available AOVs.
- * @returns The AOV list.
+ * @return The AOV list.
  */
 CAPSAICIN_EXPORT std::vector<std::string_view> GetAOVs() noexcept;
 
@@ -148,8 +195,8 @@ CAPSAICIN_EXPORT void Render() noexcept;
 CAPSAICIN_EXPORT void RenderGUI(bool readOnly = false) noexcept;
 
 /**
- * Get the current frame index (starts at zero)
- * @return The index of the current frame to/being rendered.
+ * Get the index of the most recent frame (starts at zero).
+ * @return The index of the current/last frame rendered.
  */
 CAPSAICIN_EXPORT uint32_t GetFrameIndex() noexcept;
 
@@ -265,59 +312,88 @@ CAPSAICIN_EXPORT void SetRenderPaused(bool paused) noexcept;
 CAPSAICIN_EXPORT bool GetRenderPaused() noexcept;
 
 /**
- * Step jitter frame index by a specified number of frames.
+ * Set camera jitter to manual and step jitter frame index by a specified number of frames.
  * @param frames The number of frames to step.
  */
 CAPSAICIN_EXPORT void StepJitterFrameIndex(uint32_t frames);
 
 /**
+ * Set camera jitter sequence length.
+ * @param length The length of the Halton sequence used to calculate jitter.
+ */
+CAPSAICIN_EXPORT void SetCameraJitterPhase(uint32_t length);
+
+/**
  * Gets count of enabled delta lights (point,spot,direction) in current scene.
- * @returns The delta light count.
+ * @return The delta light count.
  */
 CAPSAICIN_EXPORT uint32_t GetDeltaLightCount() noexcept;
 
 /**
  * Gets count of enabled area lights in current scene.
- * @returns The area light count.
+ * @return The area light count.
  */
 CAPSAICIN_EXPORT uint32_t GetAreaLightCount() noexcept;
 
 /**
  * Gets count of enabled environment lights in current scene.
- * @returns The environment light count.
+ * @return The environment light count.
  */
 CAPSAICIN_EXPORT uint32_t GetEnvironmentLightCount() noexcept;
 
 /**
  * Gets count of number of triangles present in current scene.
- * @returns The triangle count.
+ * @return The triangle count.
  */
 CAPSAICIN_EXPORT uint32_t GetTriangleCount() noexcept;
 
 /**
  * Gets size of the acceleration structure (in bytes).
- * @returns The acceleration structure size.
+ * @return The acceleration structure size.
  */
 CAPSAICIN_EXPORT uint64_t GetBvhDataSize() noexcept;
 
 /**
+ * Gets the dimensions/resolution of the currently active window.
+ * @return The window width and height.
+ */
+CAPSAICIN_EXPORT std::pair<uint32_t, uint32_t> GetWindowDimensions() noexcept;
+
+/**
+ * Gets the current render dimensions/resolution.
+ * This may differ from window resolution when using render scaling or other non 1:1 render resolutions.
+ * @return The render width and height.
+ */
+CAPSAICIN_EXPORT std::pair<uint32_t, uint32_t> GetRenderDimensions() noexcept;
+
+/**
+ * Set a scaling factor to differentiate between render resolution and window resolution.
+ * A scaling factor of 2.0 would result in the render resolution being set to twice the window resolution
+ * along each 2D axis (e.g. 1920x1080 will become 3840x2160). While a value of 0.5 will result in half the
+ * resolution along each axis. In cases where the scaling factor does not evenly divide into the window
+ * resolution then the render resolution will be rounded to the nearest pixel.
+ * @param scale The scaling factor to apply to window resolution to get render resolution.
+ */
+CAPSAICIN_EXPORT void SetRenderDimensionsScale(float scale) noexcept;
+
+/**
  * Gets the internal configuration options.
- * @returns The list of available options.
+ * @return The list of available options.
  */
 CAPSAICIN_EXPORT
-std::map<std::string_view, std::variant<bool, uint32_t, int32_t, float>> &GetOptions() noexcept;
+std::map<std::string_view, std::variant<bool, uint32_t, int32_t, float, std::string>> &GetOptions() noexcept;
 
 /**
  * Checks if an options exists with the specified type.
  * @tparam T Generic type parameter of the requested option.
  * @param name The name of the option to get.
- * @returns True if options is found and has correct type, False otherwise.
+ * @return True if options is found and has correct type, False otherwise.
  */
 template<typename T>
 bool hasOption(std::string_view const &name) noexcept
 {
     auto &options = GetOptions();
-    if (auto i = options.find(name); i != options.end())
+    if (auto const i = options.find(name); i != options.end())
     {
         return std::holds_alternative<T>(i->second);
     }
@@ -328,13 +404,13 @@ bool hasOption(std::string_view const &name) noexcept
  * Gets a reference to an option from internal options list.
  * @tparam T Generic type parameter of the requested option.
  * @param name The name of the option to get.
- * @returns The options value (nullptr if option does not exists or typename does not match).
+ * @return The options value (uninitialised if option does not exist or typename does not match).
  */
 template<typename T>
 T &getOption(std::string_view const &name) noexcept
 {
     auto &options = GetOptions();
-    if (auto i = options.find(name); i != options.end())
+    if (auto const i = options.find(name); i != options.end())
     {
         if (std::holds_alternative<T>(i->second))
         {
@@ -348,16 +424,16 @@ T &getOption(std::string_view const &name) noexcept
 
 /**
  * Sets an options value in the internal options list.
- * If the option does not exists it is created.
+ * If the option does not exist it is created.
  * @tparam T Generic type parameter of the requested option.
  * @param name  The name of the option to set.
  * @param value The new value of the option.
  */
 template<typename T>
-void setOption(std::string_view const &name, const T value) noexcept
+void setOption(std::string_view const &name, T const value) noexcept
 {
     auto &options = GetOptions();
-    if (auto i = options.find(name); i != options.end())
+    if (auto const i = options.find(name); i != options.end())
     {
         if (std::holds_alternative<T>(i->second))
         {
@@ -379,17 +455,18 @@ CAPSAICIN_EXPORT void Terminate() noexcept;
 CAPSAICIN_EXPORT void ReloadShaders() noexcept;
 
 /**
- * Saves an AOV buffer to disk.
+ * Saves an debug view to disk.
  * @param file_path Full pathname to the file to save as.
- * @param aov       The buffer to save (get available from @GetAOVs()).
+ * @param view      The view to save (get available from GetDebugViews()).
  */
-CAPSAICIN_EXPORT void DumpAOVBuffer(char const *file_path, std::string_view const &aov) noexcept;
+CAPSAICIN_EXPORT void DumpDebugView(
+    std::filesystem::path const &file_path, std::string_view const &view) noexcept;
 
 /**
  * Saves current camera attributes to disk.
  * @param file_path   Full pathname to the file to save as.
  * @param jittered    Jittered camera or not.
  */
-CAPSAICIN_EXPORT void DumpCamera(char const *file_path, bool jittered) noexcept;
+CAPSAICIN_EXPORT void DumpCamera(std::filesystem::path const &file_path, bool jittered) noexcept;
 
 } // namespace Capsaicin

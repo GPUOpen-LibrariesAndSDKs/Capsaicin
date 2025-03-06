@@ -10,25 +10,25 @@ A key concept within Capsaicin is the ability to support multiple different rese
 
 The basic building blocks of Capsaicin can be viewed as follows:
 - CapsaicinInternal
-	- Renderer(s)
-	- RenderTechnique(s)
+    - Renderer(s)
+    - RenderTechnique(s)
 
 ## CapsaicinInternal
 
 This is the internal framework entity responsible for managing and performing all engine operations.
 CapsaicinInternal contains all the internal framework data and is responsible for:
-	- Loading scene data into internal data formats
-		- Mesh data
-		- Internal light lists
-		- Material data
-		- Ray tracing acceleration structures
-		- Camera data
-	- Managing and setting up the Renderer(s) and RenderTechnique(s)
-		- Creating and managing shared resources (AOVs, shared buffers etc.)
-	- Performing per-frame operations
-		- Updating internal data
-		- Running animations
-		- Calling render operations
+- Loading scene data into internal data formats
+    - Mesh data
+    - Internal light lists
+    - Material data
+    - Ray tracing acceleration structures
+    - Camera data
+- Managing and setting up the Renderer(s) and RenderTechnique(s)
+    - Creating and managing shared resources (shared textures, shared buffers etc.)
+- Performing per-frame operations
+    - Updating internal data
+    - Running animations
+    - Calling render operations
 
 ## Renderer
 

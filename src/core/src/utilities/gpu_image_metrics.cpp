@@ -31,8 +31,8 @@ GPUImageMetrics::~GPUImageMetrics() noexcept
     terminate();
 }
 
-bool GPUImageMetrics::initialise(
-    GfxContext gfxIn, std::string_view const &shaderPath, Type type, Operation operation) noexcept
+bool GPUImageMetrics::initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths,
+    Type const type, Operation operation) noexcept
 {
     gfx = gfxIn;
 
@@ -48,28 +48,29 @@ bool GPUImageMetrics::initialise(
         {
             for (auto &i : metricBufferTemp)
             {
-                i.first = 0.0f;
+                i.first = 0.0F;
             }
         }
     }
     currentType      = type;
     currentOperation = operation;
 
-    static const std::array<std::string_view, 6> typeName = {"MSE", "RMSE", "PSNR", "RMAE", "SMAPE", "SSIM"};
+    static constexpr std::array<std::string_view, 6> typeName = {
+        "MSE", "RMSE", "PSNR", "RMAE", "SMAPE", "SSIM"};
 
     if (metricBufferTemp.empty())
     {
-        const uint32_t backBufferCount = getAsyncDelay();
+        uint32_t const backBufferCount = getAsyncDelay();
         metricBufferTemp.reserve(backBufferCount);
         for (uint32_t i = 0; i < backBufferCount; ++i)
         {
             GfxBuffer   buffer = gfxCreateBuffer<float>(gfx, 1, nullptr, kGfxCpuAccess_Read);
             std::string name   = "GPUImageMetrics_";
-            name += typeName[static_cast<uint32_t>(operation)].data();
+            name.append(typeName[static_cast<uint32_t>(operation)]);
             name += "Buffer";
             name += std::to_string(i);
             buffer.setName(name.c_str());
-            metricBufferTemp.emplace_back(0.0f, buffer);
+            metricBufferTemp.emplace_back(0.0F, buffer);
         }
     }
     else
@@ -77,7 +78,7 @@ bool GPUImageMetrics::initialise(
         // Invalidate current values
         for (auto &i : metricBufferTemp)
         {
-            i.first = 0.0f;
+            i.first = 0.0F;
         }
     }
 
@@ -85,7 +86,7 @@ bool GPUImageMetrics::initialise(
     {
         metricBuffer     = gfxCreateBuffer<float>(gfx, 8160 /*required @ 1080p*/);
         std::string name = "GPUImageMetrics_Metrics";
-        name += typeName[static_cast<uint32_t>(operation)].data();
+        name.append(typeName[static_cast<uint32_t>(operation)]);
         name += "Buffer";
         metricBuffer.setName(name.c_str());
     }
@@ -94,7 +95,14 @@ bool GPUImageMetrics::initialise(
     {
         gfxDestroyProgram(gfx, metricsProgram);
         gfxDestroyKernel(gfx, metricsKernel);
-        metricsProgram = gfxCreateProgram(gfx, "utilities/gpu_image_metrics", shaderPath.data());
+        std::vector<char const *> includePaths;
+        includePaths.reserve(shaderPaths.size());
+        for (auto const &path : shaderPaths)
+        {
+            includePaths.push_back(path.c_str());
+        }
+        metricsProgram = gfxCreateProgram(gfx, "utilities/gpu_image_metrics", includePaths[0], nullptr,
+            includePaths.data(), static_cast<uint32_t>(includePaths.size()));
         std::vector<char const *> baseDefines;
         if (currentType == Type::HDR_RGB || currentType == Type::SDR_RGB || currentType == Type::SDR_SRGB)
         {
@@ -135,16 +143,17 @@ bool GPUImageMetrics::initialise(
         metricsKernel = gfxCreateComputeKernel(gfx, metricsProgram, "ComputeMetric", baseDefines.data(),
             static_cast<uint32_t>(baseDefines.size()));
     }
-    if (!reducer.initialise(gfx, shaderPath, GPUReduce::Type::Float, GPUReduce::Operation::Sum))
+    if (!reducer.initialise(gfx, shaderPaths, GPUReduce::Type::Float, GPUReduce::Operation::Sum))
     {
         return false;
     }
     return !!metricsKernel;
 }
 
-bool GPUImageMetrics::initialise(CapsaicinInternal const &capsaicin, Type type, Operation operation) noexcept
+bool GPUImageMetrics::initialise(
+    CapsaicinInternal const &capsaicin, Type const type, Operation const operation) noexcept
 {
-    return initialise(capsaicin.getGfx(), capsaicin.getShaderPath(), type, operation);
+    return initialise(capsaicin.getGfx(), capsaicin.getShaderPaths(), type, operation);
 }
 
 bool GPUImageMetrics::compare(GfxTexture const &sourceImage, GfxTexture const &referenceImage) noexcept
@@ -170,8 +179,8 @@ bool GPUImageMetrics::compareAsync(GfxTexture const &sourceImage, GfxTexture con
     }
 
     // Stream the result back to the CPU
-    const uint32_t bufferIndex = gfxGetBackBufferIndex(gfx);
-    if (metricBufferTemp[bufferIndex].first != 0.0f)
+    uint32_t const bufferIndex = gfxGetBackBufferIndex(gfx);
+    if (metricBufferTemp[bufferIndex].first != 0.0F)
     {
         auto const newValue = *gfxBufferGetData<float>(gfx, metricBufferTemp[bufferIndex].second);
         currentValue        = convertMetric(newValue, referenceImage.getWidth() * referenceImage.getHeight());
@@ -227,7 +236,7 @@ bool GPUImageMetrics::compareInternal(
 
     if (metricBuffer.getCount() < numOutputValues)
     {
-        std::string bufferName = metricBuffer.getName();
+        std::string const bufferName = metricBuffer.getName();
         gfxDestroyBuffer(gfx, metricBuffer);
         metricBuffer = gfxCreateBuffer<float>(gfx, numOutputValues);
         metricBuffer.setName(bufferName.c_str());
@@ -258,10 +267,10 @@ bool GPUImageMetrics::compareInternal(
     return true;
 }
 
-float GPUImageMetrics::convertMetric(float value, uint32_t totalSamples) const noexcept
+float GPUImageMetrics::convertMetric(float const value, uint32_t const totalSamples) const noexcept
 {
-    double const totalPixels = static_cast<double>(totalSamples);
-    double       ret         = (double)value / totalPixels;
+    auto const totalPixels = static_cast<double>(totalSamples);
+    double     ret         = static_cast<double>(value) / totalPixels;
     switch (currentOperation)
     {
     case Operation::MSE:
@@ -293,7 +302,6 @@ float GPUImageMetrics::convertMetric(float value, uint32_t totalSamples) const n
         break;
     case Operation::SSIM:
         // SSIM =[1/(width*height)]Sum(SSIM(x,y))
-        break;
     default: break;
     }
     return static_cast<float>(ret);

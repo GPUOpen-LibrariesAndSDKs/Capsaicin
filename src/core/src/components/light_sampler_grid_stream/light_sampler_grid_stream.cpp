@@ -25,6 +25,7 @@ THE SOFTWARE.
 #include "../light_builder/light_builder.h"
 #include "../light_sampler_grid_cdf/light_sampler_grid_shared.h"
 #include "capsaicin_internal.h"
+#include "components/brdf_lut/brdf_lut.h"
 
 namespace Capsaicin
 {
@@ -68,6 +69,7 @@ ComponentList LightSamplerGridStream::getComponents() const noexcept
 {
     ComponentList components;
     components.emplace_back(COMPONENT_MAKE(LightBuilder));
+    components.emplace_back(COMPONENT_MAKE(BrdfLut));
     return components;
 }
 
@@ -118,7 +120,7 @@ void LightSamplerGridStream::run(CapsaicinInternal &capsaicin) noexcept
             || boundsHostReservations.empty() /*i.e. un-initialised*/)
         {
             // Update the light sampler using scene bounds
-            auto sceneBounds = capsaicin.getSceneBounds();
+            auto const sceneBounds = capsaicin.getSceneBounds();
             setBounds(sceneBounds, this);
         }
 
@@ -151,6 +153,8 @@ void LightSamplerGridStream::terminate() noexcept
     buildKernel = {};
     gfxDestroyProgram(gfx_, boundsProgram);
     boundsProgram = {};
+    gfxDestroyProgram(gfx_, buildProgram);
+    buildProgram = {};
 }
 
 void LightSamplerGridStream::renderGUI(CapsaicinInternal &capsaicin) const noexcept
@@ -158,11 +162,12 @@ void LightSamplerGridStream::renderGUI(CapsaicinInternal &capsaicin) const noexc
     if (ImGui::CollapsingHeader("Light Sampler Settings", ImGuiTreeNodeFlags_None))
     {
         ImGui::DragInt("Max Cells per Axis",
-            (int32_t *)&capsaicin.getOption<uint32_t>("light_grid_stream_num_cells"), 1, 1, 128);
-        auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+            reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_grid_stream_num_cells")), 1, 1,
+            128);
+        auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
         ImGui::DragInt("Number Lights per Cell",
-            (int32_t *)&capsaicin.getOption<uint32_t>("light_grid_stream_lights_per_cell"), 1, 1,
-            lightBuilder->getLightCount());
+            reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_grid_stream_lights_per_cell")),
+            1, 1, static_cast<int>(lightBuilder->getLightCount()));
         // ImGui::Checkbox("Octahedral Sampling",
         // &capsaicin.getOption<bool>("light_grid_stream_octahedron_sampling"));
         ImGui::Checkbox(
@@ -170,7 +175,16 @@ void LightSamplerGridStream::renderGUI(CapsaicinInternal &capsaicin) const noexc
         ImGui::Combo("Merge Algorithm",
             reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_grid_stream_merge_type")),
             "Random Select\0Without Replacement\0With Replacement");
+        bool const usingRandomMerge = capsaicin.getOption<uint32_t>("light_grid_stream_merge_type") == 0;
+        if (usingRandomMerge)
+        {
+            ImGui::BeginDisabled();
+        }
         ImGui::Checkbox("Intermediate Resample", &capsaicin.getOption<bool>("light_grid_stream_resample"));
+        if (usingRandomMerge)
+        {
+            ImGui::EndDisabled();
+        }
         ImGui::Checkbox("Parallel Build", &capsaicin.getOption<bool>("light_grid_stream_parallel_build"));
     }
 }
@@ -180,7 +194,7 @@ void LightSamplerGridStream::reserveBoundsValues(uint32_t reserve, std::type_inf
     boundsReservations.emplace(caller.hash_code(), reserve);
     // Determine if current buffer needs to be reallocated
     uint32_t elements = 0;
-    for (auto &i : boundsReservations)
+    for (auto const &i : boundsReservations)
     {
         elements += i.second;
     }
@@ -201,7 +215,7 @@ void LightSamplerGridStream::setBounds(
     // Add to internal host reservations
     boundsHostReservations.emplace(caller.hash_code(), bounds);
 
-    // Add an additional reserve spot in device buffer so that this can coexist with reserveBoundsValues
+    // Add a reserved spot in device buffer so that this can coexist with reserveBoundsValues
     reserveBoundsValues(1, this);
 }
 
@@ -209,14 +223,18 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
 {
     // Update internal options
     auto const optionsNew   = convertOptions(capsaicin.getOptions());
-    auto       lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
+
+    // Sanity check input options
+    options.light_grid_stream_num_cells       = glm::max(options.light_grid_stream_num_cells, 1U);
+    options.light_grid_stream_lights_per_cell = glm::max(options.light_grid_stream_lights_per_cell, 1U);
 
     // Check if many lights kernel should be run. This requires greater than 128 lights per reservoir as
     // otherwise there will be empty reservoirs. Note: The 128 must match the LS_GRID_STREAM_THREADREDUCE
     // value which is currently set to the largest possible wave size. If targeting a specific platform then
     // matching this value with the wave size will give better results.
-    bool manyLights = options.light_grid_stream_parallel_build
-                   && (lightBuilder->getLightCount() > 128 * options.light_grid_stream_lights_per_cell);
+    bool const manyLights = options.light_grid_stream_parallel_build
+                         && (lightBuilder->getLightCount() > 128 * options.light_grid_stream_lights_per_cell);
 
     recompileFlag =
         optionsNew.light_grid_stream_octahedron_sampling != options.light_grid_stream_octahedron_sampling
@@ -224,22 +242,22 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
         || optionsNew.light_grid_stream_merge_type != options.light_grid_stream_merge_type
         || optionsNew.light_grid_stream_centroid_build != options.light_grid_stream_centroid_build
         || usingManyLights != manyLights || lightBuilder->needsRecompile(capsaicin);
-    lightsUpdatedFlag =
+    lightSettingsUpdatedFlag =
         optionsNew.light_grid_stream_octahedron_sampling != options.light_grid_stream_octahedron_sampling
         || optionsNew.light_grid_stream_lights_per_cell != options.light_grid_stream_lights_per_cell
         || optionsNew.light_grid_stream_num_cells != options.light_grid_stream_num_cells
         || optionsNew.light_grid_stream_centroid_build != options.light_grid_stream_centroid_build
-        || usingManyLights != manyLights;
+        || usingManyLights != manyLights || lightBuilder->getLightIndexesChanged();
     options         = optionsNew;
     usingManyLights = manyLights;
 
-    const uint32_t numCells = options.light_grid_stream_num_cells;
+    uint32_t const numCells = options.light_grid_stream_num_cells;
     uint lightDataLength    = numCells * numCells * numCells * options.light_grid_stream_lights_per_cell;
     if (options.light_grid_stream_octahedron_sampling)
     {
         lightDataLength *= 8;
     }
-    if (lightIndexBuffer.getCount() < lightDataLength && lightDataLength > 0)
+    if (lightIndexBuffer.getCount() < lightDataLength)
     {
         gfxDestroyBuffer(gfx_, lightIndexBuffer);
         gfxDestroyBuffer(gfx_, lightReservoirBuffer);
@@ -251,6 +269,7 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
         gfxDestroyKernel(gfx_, calculateBoundsKernel);
         gfxDestroyKernel(gfx_, buildKernel);
         gfxDestroyProgram(gfx_, boundsProgram);
+        gfxDestroyProgram(gfx_, buildProgram);
 
         initKernels(capsaicin);
     }
@@ -261,11 +280,11 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
     {
         // Sum up everything in boundsHostReservations
         std::pair<float3, float3> newBounds = boundsHostReservations[0];
-        for (auto &i :
+        for (auto const &i :
             std::ranges::subrange(++boundsHostReservations.cbegin(), boundsHostReservations.cend()))
         {
-            newBounds.first  = glm::min(newBounds.first, i.second.first);
-            newBounds.second = glm::max(newBounds.second, i.second.second);
+            newBounds.first  = min(newBounds.first, i.second.first);
+            newBounds.second = max(newBounds.second, i.second.second);
         }
 
         // Check if the host side bounds needs to be uploaded
@@ -274,27 +293,29 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
             currentBounds = newBounds;
             hostUpdated   = true;
             // Check if there are also any device side reservations, if so then upload the host value to the
-            // last slot so that it will participate in reduceMinMax but wont be overwritten each frame
+            // last slot so that it will participate in reduceMinMax but won't be overwritten each frame
             if (boundsReservations.size() > 1)
             {
                 // Copy to last element boundsMinBuffer and boundsMaxBuffer
-                GfxBuffer uploadMinBuffer =
+                GfxBuffer const uploadMinBuffer =
                     gfxCreateBuffer<float>(gfx_, 3, &newBounds.first, kGfxCpuAccess_Write);
-                gfxCommandCopyBuffer(gfx_, boundsMinBuffer, ((size_t)boundsMaxLength - 1) * sizeof(float) * 3,
-                    uploadMinBuffer, 0, sizeof(float) * 3);
-                GfxBuffer uploadMaxBuffer =
+                gfxCommandCopyBuffer(gfx_, boundsMinBuffer,
+                    (static_cast<size_t>(boundsMaxLength) - 1) * sizeof(float) * 3, uploadMinBuffer, 0,
+                    sizeof(float) * 3);
+                GfxBuffer const uploadMaxBuffer =
                     gfxCreateBuffer<float>(gfx_, 3, &newBounds.second, kGfxCpuAccess_Write);
-                gfxCommandCopyBuffer(gfx_, boundsMaxBuffer, ((size_t)boundsMaxLength - 1) * sizeof(float) * 3,
-                    uploadMaxBuffer, 0, sizeof(float) * 3);
+                gfxCommandCopyBuffer(gfx_, boundsMaxBuffer,
+                    (static_cast<size_t>(boundsMaxLength) - 1) * sizeof(float) * 3, uploadMaxBuffer, 0,
+                    sizeof(float) * 3);
                 gfxDestroyBuffer(gfx_, uploadMinBuffer);
                 gfxDestroyBuffer(gfx_, uploadMaxBuffer);
             }
             else
             {
-                GfxBuffer uploadMinBuffer =
+                GfxBuffer const uploadMinBuffer =
                     gfxCreateBuffer<float>(gfx_, 3, &newBounds.first, kGfxCpuAccess_Write);
                 gfxCommandCopyBuffer(gfx_, boundsMinBuffer, 0, uploadMinBuffer, 0, sizeof(float) * 3);
-                GfxBuffer uploadMaxBuffer =
+                GfxBuffer const uploadMaxBuffer =
                     gfxCreateBuffer<float>(gfx_, 3, &newBounds.second, kGfxCpuAccess_Write);
                 gfxCommandCopyBuffer(gfx_, boundsMaxBuffer, 0, uploadMaxBuffer, 0, sizeof(float) * 3);
                 gfxDestroyBuffer(gfx_, uploadMinBuffer);
@@ -303,29 +324,10 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
         }
     }
 
-    // Update constants buffer
-    GfxBuffer              samplingConstants = capsaicin.allocateConstantBuffer<LightSamplingConstants>(1);
-    LightSamplingConstants constantData      = {};
-    constantData.maxCellsPerAxis             = numCells;
-    constantData.maxNumLightsPerCell         = options.light_grid_stream_lights_per_cell;
-    gfxBufferGetData<LightSamplingConstants>(gfx_, samplingConstants)[0] = constantData;
-
-    // Add program parameters
-    addProgramParameters(capsaicin, boundsProgram);
-    gfxProgramSetParameter(gfx_, boundsProgram, "g_DispatchCommandBuffer", dispatchCommandBuffer);
-    gfxProgramSetParameter(gfx_, boundsProgram, "g_LightSampler_Constants", samplingConstants);
-
-    gfxProgramSetParameter(gfx_, boundsProgram, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
-    gfxProgramSetParameter(
-        gfx_, boundsProgram, "g_TextureMaps", capsaicin.getTextures(), capsaicin.getTextureCount());
-    gfxProgramSetParameter(gfx_, boundsProgram, "g_TextureSampler", capsaicin.getLinearSampler());
-
-    gfxProgramSetParameter(gfx_, boundsProgram, "g_FrameIndex", capsaicin.getFrameIndex());
-
     // Create the light sampling structure bounds by reducing all values stored in the boundsMin|MaxBuffers
     if (boundsReservations.size() > (boundsHostReservations.empty() ? 0 : 1))
     {
-        RenderTechnique::TimedSection const timedSection(*parent, "CalculateLightSamplerBounds");
+        TimedSection const timedSection(*parent, "CalculateLightSamplerBounds");
         // Reduce Min/Max
         reducerMin.reduceIndirect(boundsMinBuffer, boundsLengthBuffer, boundsMaxLength);
         reducerMax.reduceIndirect(boundsMaxBuffer, boundsLengthBuffer, boundsMaxLength);
@@ -335,25 +337,53 @@ void LightSamplerGridStream::update(CapsaicinInternal &capsaicin, Timeable *pare
 
     // Calculate the required configuration values
     if (boundsReservations.size() > (boundsHostReservations.empty() ? 0 : 1) || hostUpdated
-        || lightsUpdatedFlag || recompileFlag)
+        || lightSettingsUpdatedFlag || recompileFlag)
     {
-        RenderTechnique::TimedSection const timedSection(*parent, "CalculateLightSamplerConfiguration");
+        TimedSection const timedSection(*parent, "CalculateLightSamplerConfiguration");
+
+        // Update constants buffer
+        GfxBuffer const samplingConstants   = capsaicin.allocateConstantBuffer<LightSamplingConstants>(1);
+        LightSamplingConstants constantData = {};
+        constantData.maxCellsPerAxis        = numCells;
+        constantData.maxNumLightsPerCell    = options.light_grid_stream_lights_per_cell;
+        gfxBufferGetData<LightSamplingConstants>(gfx_, samplingConstants)[0] = constantData;
+
+        // Add program parameters
+        gfxProgramSetParameter(gfx_, boundsProgram, "g_LightSampler_Configuration", configBuffer);
+        gfxProgramSetParameter(gfx_, boundsProgram, "g_LightSampler_Constants", samplingConstants);
+        gfxProgramSetParameter(gfx_, boundsProgram, "g_DispatchCommandBuffer", dispatchCommandBuffer);
+        gfxProgramSetParameter(gfx_, boundsProgram, "g_LightSampler_MinBounds", boundsMinBuffer);
+        gfxProgramSetParameter(gfx_, boundsProgram, "g_LightSampler_MaxBounds", boundsMaxBuffer);
+
+        lightBuilder->addProgramParameters(capsaicin, boundsProgram);
+
         // Calculate the required configuration values
         gfxCommandBindKernel(gfx_, calculateBoundsKernel);
         gfxCommandDispatch(gfx_, 1, 1, 1);
+
+        // Release constant buffer
+        gfxDestroyBuffer(gfx_, samplingConstants);
     }
 
     // Create the light sampling structure
     {
-        RenderTechnique::TimedSection const timedSection(*parent, "BuildLightSampler");
+        TimedSection const timedSection(*parent, "BuildLightSampler");
+
+        // Add program parameters
+        addProgramParameters(capsaicin, buildProgram);
+
+        gfxProgramSetParameter(gfx_, buildProgram, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
+        auto const &textures = capsaicin.getTextures();
+        gfxProgramSetParameter(
+            gfx_, buildProgram, "g_TextureMaps", textures.data(), static_cast<uint32_t>(textures.size()));
+        gfxProgramSetParameter(gfx_, buildProgram, "g_TextureSampler", capsaicin.getLinearSampler());
+
+        gfxProgramSetParameter(gfx_, buildProgram, "g_FrameIndex", capsaicin.getFrameIndex());
 
         // Build the sampling structure
         gfxCommandBindKernel(gfx_, buildKernel);
         gfxCommandDispatchIndirect(gfx_, dispatchCommandBuffer);
     }
-
-    // Release constant buffer
-    gfxDestroyBuffer(gfx_, samplingConstants);
 }
 
 bool LightSamplerGridStream::needsRecompile(
@@ -365,40 +395,43 @@ bool LightSamplerGridStream::needsRecompile(
 std::vector<std::string> LightSamplerGridStream::getShaderDefines(
     CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto                     lightBuilder = capsaicin.getComponent<LightBuilder>();
-    std::vector<std::string> baseDefines(std::move(lightBuilder->getShaderDefines(capsaicin)));
+    auto const  lightBuilder = capsaicin.getComponent<LightBuilder>();
+    std::vector baseDefines(lightBuilder->getShaderDefines(capsaicin));
     if (options.light_grid_stream_octahedron_sampling)
     {
-        baseDefines.push_back("LIGHTSAMPLERSTREAM_USE_OCTAHEDRON_SAMPLING");
+        baseDefines.emplace_back("LIGHTSAMPLERSTREAM_USE_OCTAHEDRON_SAMPLING");
     }
-    if (options.light_grid_stream_resample)
+    if (options.light_grid_stream_resample && options.light_grid_stream_merge_type != 0)
     {
-        baseDefines.push_back("LIGHTSAMPLERSTREAM_RES_USE_RESAMPLE");
+        baseDefines.emplace_back("LIGHTSAMPLERSTREAM_RES_USE_RESAMPLE");
     }
     if (options.light_grid_stream_merge_type == 1)
     {
-        baseDefines.push_back("LIGHTSAMPLERSTREAM_RES_FAST_MERGE");
+        baseDefines.emplace_back("LIGHTSAMPLERSTREAM_RES_FAST_MERGE");
     }
     else if (options.light_grid_stream_merge_type == 0)
     {
-        baseDefines.push_back("LIGHTSAMPLERSTREAM_RES_RANDOM_MERGE");
+        baseDefines.emplace_back("LIGHTSAMPLERSTREAM_RES_RANDOM_MERGE");
     }
     if (options.light_grid_stream_centroid_build)
     {
-        baseDefines.push_back("LIGHT_SAMPLE_VOLUME_CENTROID");
+        baseDefines.emplace_back("LIGHT_SAMPLE_VOLUME_CENTROID");
     }
     if (usingManyLights)
     {
-        baseDefines.push_back("LIGHTSAMPLERSTREAM_RES_MANYLIGHTS");
+        baseDefines.emplace_back("LIGHTSAMPLERSTREAM_RES_MANYLIGHTS");
     }
     return baseDefines;
 }
 
 void LightSamplerGridStream::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
     lightBuilder->addProgramParameters(capsaicin, program);
+
+    auto const brdf_lut = capsaicin.getComponent<BrdfLut>();
+    brdf_lut->addProgramParameters(capsaicin, boundsProgram);
 
     // Bind the light sampling shader parameters
     gfxProgramSetParameter(gfx_, program, "g_LightSampler_BoundsLength", boundsLengthBuffer);
@@ -407,33 +440,36 @@ void LightSamplerGridStream::addProgramParameters(
     gfxProgramSetParameter(gfx_, program, "g_LightSampler_Configuration", configBuffer);
     gfxProgramSetParameter(gfx_, program, "g_LightSampler_CellsIndex", lightIndexBuffer);
     gfxProgramSetParameter(gfx_, program, "g_LightSampler_CellsReservoirs", lightReservoirBuffer);
+    gfxProgramSetParameter(gfx_, program, "g_LinearSampler", capsaicin.getLinearSampler());
 }
 
-bool LightSamplerGridStream::getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept
+bool LightSamplerGridStream::getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
-    return lightsUpdatedFlag || lightBuilder->getLightsUpdated();
+    return lightSettingsUpdatedFlag || capsaicin.getComponent<LightBuilder>()->getLightSettingsUpdated();
 }
 
 std::string_view LightSamplerGridStream::getHeaderFile() const noexcept
 {
-    return std::string_view("\"../../components/light_sampler_grid_stream/light_sampler_grid_stream.hlsl\"");
+    return "\"../../components/light_sampler_grid_stream/light_sampler_grid_stream.hlsl\"";
 }
 
 bool LightSamplerGridStream::initKernels(CapsaicinInternal const &capsaicin) noexcept
 {
-    boundsProgram = gfxCreateProgram(
-        gfx_, "components/light_sampler_grid_stream/light_sampler_grid_stream", capsaicin.getShaderPath());
-    auto                      baseDefines(std::move(getShaderDefines(capsaicin)));
+    boundsProgram =
+        capsaicin.createProgram("components/light_sampler_grid_stream/light_sampler_grid_stream_bounds");
+    buildProgram =
+        capsaicin.createProgram("components/light_sampler_grid_stream/light_sampler_grid_stream_build");
+    auto const                baseDefines(getShaderDefines(capsaicin));
     std::vector<char const *> defines;
-    for (auto &i : baseDefines)
+    defines.reserve(baseDefines.size());
+    for (auto const &i : baseDefines)
     {
         defines.push_back(i.c_str());
     }
     calculateBoundsKernel = gfxCreateComputeKernel(
         gfx_, boundsProgram, "CalculateBounds", defines.data(), static_cast<uint32_t>(defines.size()));
     buildKernel = gfxCreateComputeKernel(
-        gfx_, boundsProgram, "Build", defines.data(), static_cast<uint32_t>(defines.size()));
+        gfx_, buildProgram, "Build", defines.data(), static_cast<uint32_t>(defines.size()));
     return !!buildKernel;
 }
 
@@ -449,8 +485,8 @@ bool LightSamplerGridStream::initBoundsBuffers() noexcept
 
 bool LightSamplerGridStream::initLightIndexBuffer() noexcept
 {
-    const uint32_t numCells        = options.light_grid_stream_num_cells;
-    const uint32_t lightsPerCell   = options.light_grid_stream_lights_per_cell;
+    uint32_t const numCells        = options.light_grid_stream_num_cells;
+    uint32_t const lightsPerCell   = options.light_grid_stream_lights_per_cell;
     uint           lightDataLength = numCells * numCells * numCells * lightsPerCell;
     if (options.light_grid_stream_octahedron_sampling)
     {
@@ -459,8 +495,7 @@ bool LightSamplerGridStream::initLightIndexBuffer() noexcept
 
     lightIndexBuffer = gfxCreateBuffer<uint>(gfx_, lightDataLength);
     lightIndexBuffer.setName("Capsaicin_LightSamplerGrid_IndexBuffer");
-    lightReservoirBuffer =
-        gfxCreateBuffer<float2>(gfx_, lightDataLength); // Only need half as much if use resampling
+    lightReservoirBuffer = gfxCreateBuffer<float2>(gfx_, lightDataLength);
     lightReservoirBuffer.setName("Capsaicin_LightSamplerGrid_ReservoirBuffer");
     return !!lightReservoirBuffer;
 }

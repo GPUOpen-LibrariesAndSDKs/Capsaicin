@@ -1,0 +1,84 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "gpu_shared.h"
+#include "math/transform.hlsl"
+
+uint g_VertexCount;
+uint g_VertexOffset;
+uint g_VertexSourceOffset;
+uint g_JointOffset;
+uint g_WeightsOffset;
+uint g_TargetsCount;
+uint g_JointMatrixOffset;
+float4x4 g_InstanceInverseTransform;
+RWStructuredBuffer<Vertex> g_VertexBuffer;
+StructuredBuffer<Vertex> g_VertexSourceBuffer;
+StructuredBuffer<float4x4> g_JointMatricesBuffer;
+StructuredBuffer<Joint> g_JointBuffer;
+StructuredBuffer<float> g_MorphWeightBuffer;
+
+[numthreads(128, 1, 1)]
+void main(in uint did : SV_DispatchThreadID)
+{
+    uint vertex_index = did;
+
+    if (vertex_index >= g_VertexCount)
+    {
+        return; // out of bounds
+    }
+
+    uint vertex_id = g_VertexOffset + vertex_index;
+    uint vertex_source_id = g_VertexSourceOffset + vertex_index * (g_TargetsCount + 1);
+    float3 position = g_VertexSourceBuffer[vertex_source_id].getPosition();
+    float3 normal = g_VertexSourceBuffer[vertex_source_id].getNormal();
+    float2 uv = g_VertexSourceBuffer[vertex_source_id].getUV();
+
+    for (uint i = 0; i < g_TargetsCount; ++i)
+    {
+        uint vertex_morph_index = vertex_source_id + i + 1;
+        position += g_MorphWeightBuffer[g_WeightsOffset + i] *
+            g_VertexSourceBuffer[vertex_morph_index].getPosition();
+        normal += g_MorphWeightBuffer[g_WeightsOffset + i] *
+            g_VertexSourceBuffer[vertex_morph_index].getNormal();
+        uv += g_MorphWeightBuffer[g_WeightsOffset + i] *
+            g_VertexSourceBuffer[vertex_morph_index].getUV();
+    }
+
+    if (g_JointMatrixOffset != ~0u)
+    {
+        uint joint_id = g_JointOffset + vertex_index;
+        Joint joint = g_JointBuffer[joint_id];
+        joint.indices += g_JointMatrixOffset;
+
+        float4x4 skin_mat =
+            joint.weights.x * g_JointMatricesBuffer[joint.indices.x] +
+            joint.weights.y * g_JointMatricesBuffer[joint.indices.y] +
+            joint.weights.z * g_JointMatricesBuffer[joint.indices.z] +
+            joint.weights.w * g_JointMatricesBuffer[joint.indices.w];
+        float3x4 skin_mat2 = (float3x4)mul(g_InstanceInverseTransform, skin_mat);
+        position = transformPoint(position, skin_mat2);
+        normal = transformNormal(normal, skin_mat2);
+    }
+
+    g_VertexBuffer[vertex_id].setVertex(position, normal, uv);
+}

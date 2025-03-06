@@ -24,7 +24,7 @@ THE SOFTWARE.
 #define MATERIAL_EVALUATION_HLSL
 
 #include "materials.hlsl"
-#include "../math/math_constants.hlsl"
+#include "math/math_constants.hlsl"
 
 /**
  * Calculates schlick fresnel term.
@@ -80,9 +80,10 @@ float evaluateNDFTrowbridgeReitz(float roughnessAlphaSqr, float dotNH)
         return 0.0f;
     }
 
-    float denom = dotNH * dotNH * (roughnessAlphaSqr - 1.0f) + 1.0f;
-    float d = roughnessAlphaSqr / (PI * denom * denom);
-    return d;
+    // Numerically stable form of Walter 2007 GGX NDF
+    float eps = 1e-5f;
+    float denom = (1.0f - dotNH * dotNH) / (roughnessAlphaSqr + eps) + dotNH * dotNH;
+    return 1.0f / (PI * roughnessAlphaSqr * denom * denom);
 }
 
 /**
@@ -131,13 +132,32 @@ float3 evaluateGGX(float roughnessAlpha, float roughnessAlphaSqr, float3 F0, flo
 }
 
 /**
+ * Evaluate the GGX BRDF without Fresnel.
+ * @param roughnessAlphaSqr The GGX roughness value squared.
+ * @param dotNH             The dot product of the normal and half vector (range [-1, 1]).
+ * @param dotNL             The dot product of the normal and light direction (range [-1, 1]).
+ * @param dotNV             The dot product of the normal and view direction (range [-1, 1]).
+ * @return The calculated reflectance.
+ */
+float evaluateGGX(float roughnessAlphaSqr, float dotNH, float dotNL, float dotNV)
+{
+    // Calculate Trowbridge-Reitz Distribution function
+    float d = evaluateNDFTrowbridgeReitz(roughnessAlphaSqr, dotNH);
+
+    // Calculate GGX Visibility function
+    float recipV = evaluateVisibilityGGX(roughnessAlphaSqr, dotNL, dotNV);
+
+    return d / recipV;
+}
+
+/**
  * Evaluate the Lambert BRDF.
  * @param albedo The diffuse colour term.
  * @return The calculated reflectance.
  */
 float3 evaluateLambert(float3 albedo)
 {
-    return albedo / PI;
+    return albedo * INV_PI;
 }
 
 /**
@@ -242,9 +262,10 @@ float3 evaluateBRDF(MaterialBRDF material, float3 normal, float3 viewDirection, 
     float3 brdf = specular + diffuse;
 #else
     // Add the weight of the diffuse compensation term to prevent excessive brightness compared to specular
+    diffuse *= saturate(dotNL);
     diffuse *= diffuseCompensation(0.04f.xxx, dotHV);
     specular = 0.f;
-    float3 brdf = diffuse * saturate(dotNL);
+    float3 brdf = diffuse;
 #endif
     return brdf;
 }
@@ -262,6 +283,24 @@ float3 evaluateBRDF(MaterialBRDF material, float3 normal, float3 viewDirection, 
     float3 diffuse;
     float3 specular;
     return evaluateBRDF(material, normal, viewDirection, lightDirection, diffuse, specular);
+}
+
+/**
+ * NDF filtering for specular AA using given derivatives for ray differentials.
+ * [Y. Tokuyoshi and A. S. Kaplanyan 2021 "Stable Geometric Specular Antialiasing with Projected-Space NDF Filtering"]
+ * @param dndu   Derivaive of normals in the horizontal axis of screen.
+ * @param dndv   Derivaive of normals in the vertical axis of screen.
+ * @param alpha2 Alpha roughness squared.
+ * @return Filtered alpha roughness squared. The range is [0, 1].
+ */
+float IsotropicNDFFiltering(const float3 dndu, const float3 dndv, const float alpha2)
+{
+    const float SIGMA2 = 0.15915494;
+    const float KAPPA = 0.18;
+    const float kernelRoughnessAlpha2 = SIGMA2 * (dot(dndu, dndu) + dot(dndv, dndv));
+    const float clampedKernelRoughnessAlpha2 = min(kernelRoughnessAlpha2, KAPPA);
+    const float filteredRoughnessAlpha2 = saturate(alpha2 + clampedKernelRoughnessAlpha2);
+    return filteredRoughnessAlpha2;
 }
 
 #endif // MATERIAL_EVALUATION_HLSL

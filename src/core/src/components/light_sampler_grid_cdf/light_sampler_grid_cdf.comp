@@ -33,7 +33,7 @@ uint g_FrameIndex;
 #endif
 
 #include "light_sampler_grid_cdf.hlsl"
-#include "../../math/random.hlsl"
+#include "math/random.hlsl"
 
 #define THREADX 4
 #define THREADY 4
@@ -91,12 +91,15 @@ void Build(in uint3 did : SV_DispatchThreadID)
         {
             // Store only the most important lights
             totalWeight += y;
+#ifndef LIGHTSAMPLERCDF_HAS_ALL_LIGHTS
             if (storedLights < maxLightsPerCell)
+#endif
             {
                 ++storedLights;
                 g_LightSampler_CellsIndex[cellIndex + storedLights] = lightIndex;
                 g_LightSampler_CellsCDF[cellIndex + storedLights] = y;
             }
+#ifndef LIGHTSAMPLERCDF_HAS_ALL_LIGHTS
             else
             {
                 // Find the lowest contributing light and replace
@@ -117,6 +120,7 @@ void Build(in uint3 did : SV_DispatchThreadID)
                     g_LightSampler_CellsCDF[smallestLight] = y;
                 }
             }
+#endif
         }
     }
 
@@ -127,7 +131,7 @@ void Build(in uint3 did : SV_DispatchThreadID)
     float runningCDF = 0.0f;
     for (uint i = startIndex; i <= cellIndex + storedLights; ++i)
     {
-        runningCDF = runningCDF + g_LightSampler_CellsCDF[i];
+        runningCDF += g_LightSampler_CellsCDF[i];
         g_LightSampler_CellsCDF[i] = runningCDF;
     }
     // Normalise CDF
@@ -141,5 +145,7 @@ void Build(in uint3 did : SV_DispatchThreadID)
     // Write out max cdf to cell table
 #ifndef LIGHTSAMPLERCDF_HAS_ALL_LIGHTS
     g_LightSampler_CellsCDF[cellIndex] = runningCDF / totalWeight;
+#else
+    g_LightSampler_CellsCDF[cellIndex] = recipMaxCDF;
 #endif
 }

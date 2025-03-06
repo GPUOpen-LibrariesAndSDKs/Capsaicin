@@ -84,7 +84,7 @@ class Random
 /**
  * Make a new random number generator.
  * @param seed The seed value to use when initliasing the random generator.
- * @returns The new random number generator.
+ * @return The new random number generator.
  */
 Random MakeRandom(uint seed)
 {

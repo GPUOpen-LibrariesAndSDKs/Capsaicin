@@ -11,7 +11,7 @@ Features:
 - Inbuilt user extensible UI
 - Automated debugging and profiling information
 - Pluggable and swappable common rendering techniques such as ToneMapping, TAA, AO etc.
-- Unbiased reference path tracer
+- Reference path tracer
 
 ![Capsaicin](docs/images/scene_viewer.png)
 
@@ -35,16 +35,19 @@ Furthermore the technique can estimate direct lighting through its probe system 
 
 - Direct3D12 capable hardware and OS (Windows 10 20H2 or newer)
 - [Windows 10 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-10-sdk/) or newer
-- CMake 3.10 or newer (can use Visual Studio, VSCode or any other CMake supported IDE)
+- CMake 3.24 or newer (can use Visual Studio, VSCode or any other CMake supported IDE)
 - DirectX Raytracing capable GPU and compatible drivers
 
 ## Building
 
-Capsaicin uses submodules to include any required dependencies beyond those listed in **Prerequisites**.
+Capsaicin uses submodules to include any essential dependencies.
+
+The following submodules are required:
+- gfx: Contains gfx D3D12 abstraction library (located in "third_party/" subfolder
 
 When acquiring the code make sure to clone the repo with submodules included:
 
-`git clone --recurse-submodules https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin`
+`git clone --recurse-submodules https://github.com/Radeon-Pro/Capsaicin`
 
 If you have already cloned this repo without submodules, then use:
 
@@ -52,15 +55,18 @@ If you have already cloned this repo without submodules, then use:
 
 Capsaicin uses the [CMake](https://cmake.org/) build system. See the [Getting Started](./docs/development/getting_started.md) section for more information.
 
+Additional third party resources used by Capsaicin will be acquired using CMakes inbuilt FetchContent functionality during CMake configuration. See the [Getting Started](./docs/development/getting_started.md) section for a list of used dependencies and how they are retrieved.
+
 ## Resources
 
 - [Documentation](./docs/index.md)
     - [Getting Started](./docs/development/getting_started.md)
     - [Architecture](./docs/development/architecture.md)
+    - [Usage](./docs/usage/scene_viewer_usage.md)
 
 ## Citation
 
-If Capsaicin is used in any published work, please ensure to cite it using:
+If Capsaicin is used in any published work, ensure to cite it using:
 
 ```bibtex
 @Misc{Capsaicin23,
@@ -68,7 +74,7 @@ If Capsaicin is used in any published work, please ensure to cite it using:
    title =  {The {AMD Capsaicin Framework}},
    year =   {2023},
    month =  {8},
-   url =    {https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin},
+   url =    {https://github.com/Radeon-Pro/Capsaicin_Open},
 }
 ```
 

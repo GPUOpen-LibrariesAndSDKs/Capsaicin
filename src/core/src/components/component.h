@@ -29,21 +29,23 @@ namespace Capsaicin
 {
 class CapsaicinInternal;
 
-/** A abstract component class used to encapsulate shared operations between render techniques. */
+/** An abstract component class used to encapsulate shared operations between render techniques. */
 class Component : public Timeable
 {
-    Component(Component const &)            = delete;
-    Component &operator=(Component const &) = delete;
-    Component()                             = delete;
-
 public:
-    Component(std::string_view const &name) noexcept;
+    Component()                                      = delete;
+    Component(Component const &other)                = delete;
+    Component(Component &&other) noexcept            = delete;
+    Component &operator=(Component const &other)     = delete;
+    Component &operator=(Component &&other) noexcept = delete;
 
-    virtual ~Component() = default;
+    explicit Component(std::string_view const &name) noexcept;
+
+    ~Component() override = default;
 
     /**
      * Gets the name of the component.
-     * @returns The name string.
+     * @return The name string.
      */
     using Timeable::getName;
 
@@ -57,13 +59,25 @@ public:
      * Gets a list of any shared components used by the current component.
      * @return A list of all supported components.
      */
-    virtual ComponentList getComponents() const noexcept;
+    [[nodiscard]] virtual ComponentList getComponents() const noexcept;
 
     /**
      * Gets a list of any shared buffers used by the current component.
      * @return A list of all supported buffers.
      */
-    virtual BufferList getBuffers() const noexcept;
+    [[nodiscard]] virtual SharedBufferList getSharedBuffers() const noexcept;
+
+    /**
+     * Gets the required list of shared textures needed for the current component.
+     * @return A list of all required shared textures.
+     */
+    [[nodiscard]] virtual SharedTextureList getSharedTextures() const noexcept;
+
+    /**
+     * Gets a list of any debug views provided by the current component.
+     * @return A list of all supported debug views.
+     */
+    [[nodiscard]] virtual DebugViewList getDebugViews() const noexcept;
 
     /**
      * Initialise any internal data or state.
@@ -90,8 +104,6 @@ public:
      * @param [in,out] capsaicin The current capsaicin context.
      */
     virtual void renderGUI(CapsaicinInternal &capsaicin) const noexcept;
-
-protected:
 };
 
 class ComponentFactory : public Factory<Component>

@@ -1,0 +1,147 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "visibility_buffer_shared.h"
+
+StructuredBuffer<DrawConstants> g_VBConstants;
+
+StructuredBuffer<Meshlet> g_MeshletBuffer;
+StructuredBuffer<uint> g_MeshletPackBuffer;
+StructuredBuffer<Vertex> g_VertexBuffer;
+uint g_VertexDataIndex;
+uint g_PrevVertexDataIndex;
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<float3x4> g_TransformBuffer;
+StructuredBuffer<float3x4> g_PrevTransformBuffer;
+StructuredBuffer<Material> g_MaterialBuffer;
+
+#include "math/transform.hlsl"
+
+#define NUMVERTS 64
+#define NUMPRIMS 64
+
+groupshared float3 lds_vertexClip[NUMVERTS];
+
+[NumThreads(NUMPRIMS, 1, 1)]
+[OutputTopology("triangle")]
+void main(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID, in payload MeshPayload meshPayload,
+    out indices uint3 tris[NUMPRIMS], out vertices VertexParams verts[NUMVERTS], out primitives PrimParams prims[NUMPRIMS]
+)
+{
+    // Load the meshlet from the task shader payload
+    uint meshletIndex = meshPayload.meshletIDs[gid];
+
+    // Load the meshlet
+    Meshlet meshlet = g_MeshletBuffer[meshletIndex];
+
+    // Our vertex and primitive counts come directly from the meshlet
+    SetMeshOutputCounts(meshlet.vertex_count, meshlet.triangle_count);
+
+    // Both meshlet vertex and index data is packed together
+    uint dataIndex = meshlet.data_offset_idx + gtid;
+
+    uint instanceID = meshPayload.instanceIDs[gid];
+    Instance instance = g_InstanceBuffer[instanceID];
+    float3x4 transform = g_TransformBuffer[instance.transform_index];
+
+    // Calculate all vertices for meshlet and store in LDS
+    if (gtid < meshlet.vertex_count)
+    {
+        // Export vertex data
+        uint vertexOffset = g_MeshletPackBuffer[dataIndex];
+        uint vertexIndex = vertexOffset + instance.vertex_offset_idx[g_VertexDataIndex];
+        Vertex vertex = g_VertexBuffer[vertexIndex];
+
+        float3 position = vertex.getPosition();
+        float3 prevPosition = position;
+        // Same as isInstanceVolatile(instance)
+        if ((g_VertexDataIndex != g_PrevVertexDataIndex) &&
+            (instance.vertex_offset_idx[0] != instance.vertex_offset_idx[1]))
+        {
+            uint prev_vertex_offset = instance.vertex_offset_idx[g_PrevVertexDataIndex];
+            prevPosition = g_VertexBuffer[prev_vertex_offset + vertexOffset].getPosition();
+        }
+        position = transformPoint(position, transform);
+
+        float3x4 prevTransform = g_PrevTransformBuffer[instance.transform_index];
+        prevPosition = transformPoint(prevPosition, prevTransform);
+
+        VertexParams params;
+        params.position = mul(g_VBConstants[0].viewProjection, float4(position, 1.0f));
+#if defined(HAS_SHADING_NORMAL) || defined(HAS_VERTEX_NORMAL)
+        params.normal = transformNormal(vertex.getNormal(), transform);
+#endif
+        params.uv = vertex.getUV();
+        params.world = position;
+        params.current = params.position;
+        params.previous = mul(g_VBConstants[0].prevViewProjection, float4(prevPosition, 1.0f));
+
+        verts[gtid] = params;
+
+        lds_vertexClip[gtid] = float3(params.position.xy / params.position.w, params.position.w);
+    }
+
+    GroupMemoryBarrierWithGroupSync(); // required for lds_vertexClip
+
+    // Calculate each primitive for the meshlet
+    if (gtid < meshlet.triangle_count)
+    {
+        // Export index data
+        uint indiceIndex = dataIndex + meshlet.vertex_count;
+
+        uint packedIndices = g_MeshletPackBuffer[indiceIndex];
+        uint3 unpackedIndices = uint3(packedIndices & 0x3F, (packedIndices >> 10) & 0x3F, packedIndices >> 20);
+        tris[gtid] = unpackedIndices;
+
+        // Need to pass PrimitiveID to the fragment shader. This is the index of the triangle within the mesh
+        PrimParams params;
+        params.primitiveIndex = gtid + meshlet.mesh_prim_offset_idx;
+#ifdef DEBUG_MESHLETS
+        params.primitiveIndex = meshPayload.meshletIDs[gid];
+#endif
+        params.instanceID = instanceID;
+        params.materialID = instance.material_index;
+
+        // Perform manual back face culling
+        float3 vertexA = lds_vertexClip[unpackedIndices.x];
+        float3 vertexB = lds_vertexClip[unpackedIndices.y];
+        float3 vertexC = lds_vertexClip[unpackedIndices.z];
+        float2 edgeA = vertexB.xy - vertexA.xy;
+        float2 edgeB = vertexC.xy - vertexA.xy;
+
+        // Xor with transform determinate to handle negative scale correctly
+        bool culled = (edgeA.x * edgeB.y <= edgeA.y * edgeB.x) ^ (determinant((float3x3)transform) < 0.0f);
+
+        // Check that all vertices are in front of perspective plane
+        culled = culled && (all(float3(vertexA.z, vertexB.z, vertexC.z) > 0.0f));
+
+        if (culled)
+        {
+            // Correctly avoid culling double sided surfaces
+            Material material = g_MaterialBuffer[instance.material_index];
+            culled = asuint(material.normal_alpha_side.z) == 0;
+        }
+        params.cullPrimitive = culled;
+
+        prims[gtid] = params;
+    }
+}

@@ -34,38 +34,71 @@ Skybox::~Skybox()
     terminate();
 }
 
-AOVList Skybox::getAOVs() const noexcept
+RenderOptionList Skybox::getRenderOptions() noexcept
 {
-    AOVList aovs;
-    aovs.push_back({"DirectLighting", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"Depth", AOV::ReadWrite});
-    return aovs;
+    RenderOptionList newOptions;
+    newOptions.emplace(RENDER_OPTION_MAKE(skybox_use_jittering, options_));
+    return newOptions;
+}
+
+Skybox::RenderOptions Skybox::convertOptions(RenderOptionList const &options) noexcept
+{
+    RenderOptions newOptions;
+    RENDER_OPTION_GET(skybox_use_jittering, newOptions, options)
+    return newOptions;
+}
+
+SharedTextureList Skybox::getSharedTextures() const noexcept
+{
+    SharedTextureList textures;
+    textures.push_back({"DirectLighting", SharedTexture::Access::Write, SharedTexture::Flags::Clear,
+        DXGI_FORMAT_R16G16B16A16_FLOAT});
+    textures.push_back({"Velocity", SharedTexture::Access::Write, SharedTexture::Flags::None,
+        DXGI_FORMAT_R16G16_FLOAT});
+    textures.push_back({"Depth", SharedTexture::Access::ReadWrite});
+    return textures;
 }
 
 bool Skybox::init(CapsaicinInternal const &capsaicin) noexcept
 {
-    GfxDrawState skybox_draw_state;
-    gfxDrawStateSetColorTarget(skybox_draw_state, 0, capsaicin.getAOVBuffer("DirectLighting"));
-    gfxDrawStateSetDepthStencilTarget(skybox_draw_state, capsaicin.getAOVBuffer("Depth"));
+    GfxDrawState const skybox_draw_state;
+    gfxDrawStateSetColorTarget(
+        skybox_draw_state, 0, capsaicin.getSharedTexture("DirectLighting").getFormat());
+    gfxDrawStateSetColorTarget(
+        skybox_draw_state, 1, capsaicin.getSharedTexture("Velocity").getFormat());
+    gfxDrawStateSetDepthStencilTarget(skybox_draw_state, capsaicin.getSharedTexture("Depth").getFormat());
+    gfxDrawStateSetDepthWriteMask(skybox_draw_state, D3D12_DEPTH_WRITE_MASK_ZERO);
+    gfxDrawStateSetDepthFunction(skybox_draw_state, D3D12_COMPARISON_FUNC_GREATER);
 
-    skybox_program_ = gfxCreateProgram(gfx_, "render_techniques/skybox/skybox", capsaicin.getShaderPath());
+    skybox_program_ = capsaicin.createProgram("render_techniques/skybox/skybox");
     skybox_kernel_  = gfxCreateGraphicsKernel(gfx_, skybox_program_, skybox_draw_state);
     return !!skybox_program_;
 }
 
 void Skybox::render(CapsaicinInternal &capsaicin) noexcept
 {
+    options_ = convertOptions(capsaicin.getOptions());
+
+    if (!capsaicin.getEnvironmentBuffer())
+    {
+        return;
+    }
+
     TimedSection const timed_section(*this, "DrawSkybox");
-    uint32_t const     buffer_dimensions[] = {capsaicin.getWidth(), capsaicin.getHeight()};
 
     gfxProgramSetParameter(gfx_, skybox_program_, "g_Eye", capsaicin.getCamera().eye);
-    gfxProgramSetParameter(gfx_, skybox_program_, "g_BufferDimensions", buffer_dimensions);
-    gfxProgramSetParameter(
-        gfx_, skybox_program_, "g_ViewProjectionInverse", capsaicin.getCameraMatrices().inv_view_projection);
+    gfxProgramSetParameter(gfx_, skybox_program_, "g_BufferDimensions", capsaicin.getRenderDimensions());
+    gfxProgramSetParameter(gfx_, skybox_program_, "g_ReprojectionMatrix",
+        capsaicin.getCameraMatrices(options_.skybox_use_jittering).reprojection);
+    gfxProgramSetParameter(gfx_, skybox_program_, "g_ViewProjectionInverse",
+        capsaicin.getCameraMatrices(options_.skybox_use_jittering).inv_view_projection);
 
     gfxProgramSetParameter(gfx_, skybox_program_, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
-
     gfxProgramSetParameter(gfx_, skybox_program_, "g_LinearSampler", capsaicin.getLinearSampler());
+
+    gfxCommandBindColorTarget(gfx_, 0, capsaicin.getSharedTexture("DirectLighting"));
+    gfxCommandBindColorTarget(gfx_, 1, capsaicin.getSharedTexture("Velocity"));
+    gfxCommandBindDepthStencilTarget(gfx_, capsaicin.getSharedTexture("Depth"));
 
     gfxCommandBindKernel(gfx_, skybox_kernel_);
     gfxCommandDraw(gfx_, 3);

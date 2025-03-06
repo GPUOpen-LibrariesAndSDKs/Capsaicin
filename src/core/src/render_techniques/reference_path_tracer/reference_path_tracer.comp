@@ -24,7 +24,7 @@ THE SOFTWARE.
 #define USE_INLINE_RT 1
 #endif
 
-#include "../../geometry/path_tracing_shared.h"
+#include "geometry/path_tracing_shared.h"
 
 uint2 g_BufferDimensions;
 RayCamera g_RayCamera;
@@ -36,10 +36,10 @@ uint g_Accumulate;
 uint g_FrameIndex;
 
 StructuredBuffer<Instance> g_InstanceBuffer;
-StructuredBuffer<Mesh> g_MeshBuffer;
 StructuredBuffer<float3x4> g_TransformBuffer;
 StructuredBuffer<uint> g_IndexBuffer;
 StructuredBuffer<Vertex> g_VertexBuffer;
+uint g_VertexDataIndex;
 StructuredBuffer<Material> g_MaterialBuffer;
 
 RWTexture2D<float4> g_AccumulationBuffer;
@@ -52,8 +52,8 @@ Texture2D g_TextureMaps[] : register(space99);
 
 SamplerState g_TextureSampler; // Should be a linear sampler
 
-#include "../../components/light_sampler/light_sampler.hlsl"
-#include "../../geometry/path_tracing.hlsl"
+#include "components/light_sampler/light_sampler.hlsl"
+#include "geometry/path_tracing.hlsl"
 
 /**
  * Calculate illumination information for a specific pixel
@@ -83,7 +83,7 @@ void pathTracer(in uint2 pixel, in uint2 dimensions)
     float3 radiance = 0.0f;
 
     // Loop over requested number of samples per pixel
-    for (uint sample = 0; sample < maxSamples; ++sample)
+    for (uint sample = 0; sample < maxSamples; )
     {
         // Intialise random number sampler
         const uint id = pixel.x + pixel.y * dimensions.x;
@@ -97,14 +97,18 @@ void pathTracer(in uint2 pixel, in uint2 dimensions)
         // Calculate primary ray
         RayDesc ray = generateCameraRay(newPixelRay, g_RayCamera);
 
-        traceFullPath(ray, randomStratified, lightSampler, minBounces, maxBounces, radiance);
+        float3 pathRadiance = 0.0f.xxx;
+        traceFullPath(ray, randomStratified, lightSampler, minBounces, maxBounces, pathRadiance);
+
+        // Calculate running average of samples (Welfords online algorithm)
+        radiance = radiance + ((pathRadiance - radiance) / (float)++sample);
     }
 
     // Check for incorrect calculations
-    //if (any(isnan(radiance)) || any(isinf(radiance)) || any(radiance < 0.0f))
-    //{
-    //    radiance = 0.0f.xxx;
-    //}
+    if (any(isnan(radiance)) || any(isinf(radiance)) || any(radiance < 0.0f))
+    {
+        return;
+    }
 
     // Accumulate previous samples
     if (g_Accumulate != 0)
@@ -114,18 +118,15 @@ void pathTracer(in uint2 pixel, in uint2 dimensions)
         uint previousCount = asuint(accumulator.w);
         // Increment sample count
         uint sampleCount = previousCount + maxSamples;
-        radiance += accumulator.xyz;
+        // Calculate running average (Welfords online algorithm using Chens parallel algorithm when maxSamples > 1)
+        radiance = accumulator.xyz + (((radiance - accumulator.xyz) * (float)maxSamples) / (float)sampleCount);
         // Write out new radiance and sample count to accumulation buffer
         g_AccumulationBuffer[pixel] = float4(radiance, asfloat(sampleCount));
-        // Average out radiance so its ready for final output
-        radiance /= (float)sampleCount;
     }
     else
     {
         // Write out current value so its ready for next frame
         g_AccumulationBuffer[pixel] = float4(radiance, asfloat(maxSamples));
-        // Average out radiance so its ready for final output
-        radiance /= (float)maxSamples;
     }
 
     // Output average accumulation

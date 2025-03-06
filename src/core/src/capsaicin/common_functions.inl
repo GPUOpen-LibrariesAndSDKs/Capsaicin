@@ -25,29 +25,29 @@ namespace Capsaicin
 {
 static constexpr float const kPi = 3.14159265358979323846f;
 
-inline float DegreesToRadians(float degrees)
+inline float DegreesToRadians(float const degrees)
 {
     return degrees * kPi / 180.0f;
 }
 
-inline float RadiansToDegrees(float radians)
+inline float RadiansToDegrees(float const radians)
 {
     return radians * 180.0f / kPi;
 }
 
-inline bool IsPowerOfTwo(uint32_t value)
+inline bool IsPowerOfTwo(uint32_t const value)
 {
     return (value & (value - 1)) == 0;
 }
 
-inline float CalculateHaltonNumber(uint32_t index, uint32_t base)
+inline float CalculateHaltonNumber(uint32_t const index, uint32_t const base)
 {
     float f = 1.0f, result = 0.0f;
     for (uint32_t i = index; i > 0;)
     {
-        f /= base;
-        result = result + f * (i % base);
-        i      = (uint32_t)(i / (float)base);
+        f /= static_cast<float>(base);
+        result = result + f * static_cast<float>(i % base);
+        i      = static_cast<uint32_t>(static_cast<float>(i) / static_cast<float>(base));
     }
     return result;
 }
@@ -57,17 +57,17 @@ inline void CalculateTransformedBounds(glm::vec3 const &min_bounds, glm::vec3 co
 {
     glm::vec3 const bounds_size = max_bounds - min_bounds;
 
-    glm::vec3 const edgeX = glm::vec3(transform[0] * bounds_size.x),
-                    edgeY = glm::vec3(transform[1] * bounds_size.y),
-                    edgeZ = glm::vec3(transform[2] * bounds_size.z);
+    auto const edgeX = glm::vec3(transform[0] * bounds_size.x),
+               edgeY = glm::vec3(transform[1] * bounds_size.y),
+               edgeZ = glm::vec3(transform[2] * bounds_size.z);
 
     glm::vec3 const point0 = glm::vec3(transform * glm::vec4(min_bounds, 1.0f)), point1 = point0 + edgeX,
                     point2 = point0 + edgeY, point3 = point1 + edgeY, point4 = point0 + edgeZ,
                     point5 = point1 + edgeZ, point6 = point2 + edgeZ, point7 = point3 + edgeZ;
 
-    out_min_bounds = glm::min(glm::min(glm::min(point0, point1), glm::min(point2, point3)),
-        glm::min(glm::min(point4, point5), glm::min(point6, point7)));
-    out_max_bounds = glm::max(glm::max(glm::max(point0, point1), glm::max(point2, point3)),
-        glm::max(glm::max(point4, point5), glm::max(point6, point7)));
+    out_min_bounds =
+        min(min(min(point0, point1), min(point2, point3)), min(min(point4, point5), min(point6, point7)));
+    out_max_bounds =
+        max(max(max(point0, point1), max(point2, point3)), max(max(point4, point5), max(point6, point7)));
 }
 } // namespace Capsaicin

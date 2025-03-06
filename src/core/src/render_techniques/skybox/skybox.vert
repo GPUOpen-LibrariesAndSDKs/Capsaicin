@@ -20,7 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
+#include "math/math.hlsl"
+
 float4 main(in uint idx : SV_VertexID) : SV_Position
 {
-    return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1e-6f, 0.0f);
+    return float4(1.0f - 4.0f * (idx & 1), 1.0f - 4.0f * (idx >> 1), FLT_MIN, 1.0f);
 }

@@ -36,30 +36,35 @@ public:
 
     ~GPUSort() noexcept;
 
+    GPUSort(GPUSort const &other)                = delete;
+    GPUSort(GPUSort &&other) noexcept            = delete;
+    GPUSort &operator=(GPUSort const &other)     = delete;
+    GPUSort &operator=(GPUSort &&other) noexcept = delete;
+
     /** Type of value to sort. */
-    enum class Type : uint32_t
+    enum class Type : uint8_t
     {
         Float = 0, /* Does not support negative values */
         UInt,
     };
 
     /** Type of sort operation to perform. */
-    enum class Operation
+    enum class Operation : uint8_t
     {
-        Ascending,
+        Ascending = 0,
         Descending,
     };
 
     /**
      * Initialise the internal data based on current configuration.
-     * @param gfx        Active gfx context.
-     * @param shaderPath Path to shader files based on current working directory.
-     * @param type       The object type to reduce.
-     * @param operation  The type of operation to perform.
+     * @param gfxIn         Active gfx context.
+     * @param shaderPaths Paths to shader files based on current working directory.
+     * @param type        The object type to reduce.
+     * @param operation   The type of operation to perform.
      * @return True, if any initialisation/changes succeeded.
      */
-    bool initialise(
-        GfxContext gfx, std::string_view const &shaderPath, Type type, Operation operation) noexcept;
+    bool initialise(GfxContext const &gfxIn, std::vector<std::string> const &shaderPaths, Type type,
+        Operation operation) noexcept;
 
     /**
      * Initialise the internal data based on current configuration.
@@ -73,7 +78,8 @@ public:
     /**
      * Sort a list of keys from smallest to largest using indirect execution.
      * @param sourceBuffer The buffer containing the keys to sort (only 32bit uint or float>=0 are supported).
-     * @param numKeys      A buffer containing the number of keys in the source buffer.
+     * @param numKeys      A buffer containing the number of keys in the source buffer (must be <=
+     * maxNumKeys).
      * @param maxNumKeys   Value containing the number of keys in the source buffer, if exact value is unknown
      *  then this should be the maximum possible number of values in the source.
      */
@@ -83,7 +89,8 @@ public:
      * Sort a list of keys and associated payload from smallest to largest using indirect execution.
      * @param sourceBuffer  The buffer containing the keys to sort (only 32bit uint or float>=0 are
      * supported).
-     * @param numKeys       A buffer containing the number of keys in the source buffer.
+     * @param numKeys       A buffer containing the number of keys in the source buffer (must be <=
+     * maxNumKeys).
      * @param maxNumKeys    Value containing the number of keys in the source buffer, if exact value is
      * unknown then this should be the maximum possible number of values in the source.
      * @param sourcePayload The buffer containing the payload for each key (only 32bit payloads per key are
@@ -112,11 +119,12 @@ public:
     /**
      * Sort a segmented list of keys from smallest to largest using indirect execution.
      * @param sourceBuffer The buffer containing the keys to sort (only 32bit uint or float>=0 are supported).
+     * Segments within this buffer must have a stride equal to maxNumKeys.
      * @param numSegments  The number of segments to sort.
      * @param numKeys      A buffer containing the number of keys in each segment of the source buffer (must
-     *  have @numSegments values).
-     * @param maxNumKeys   Value containing the number of keys in each segment, if exact value is unknown then
-     *  this should be the maximum possible number of values in each segment.
+     *  have numSegments values with each value being <= maxNumKeys).
+     * @param maxNumKeys   Value containing the maximum possible number of values in each segment. This also
+     * indicates the stride of each segment in the input buffer.
      */
     void sortIndirectSegmented(
         GfxBuffer const &sourceBuffer, uint numSegments, GfxBuffer const &numKeys, uint maxNumKeys) noexcept;
@@ -124,12 +132,12 @@ public:
     /**
      * Sort a segmented list of keys and associated payload from smallest to largest using indirect execution.
      * @param sourceBuffer  The buffer containing the keys to sort (only 32bit uint or float>=0 are
-     * supported).
+     * supported). Segments within this buffer must have a stride equal to maxNumKeys.
      * @param numSegments   The number of segments to sort.
      * @param numKeys       A buffer containing the number of keys in each segment of the source buffer (must
-     *  have @numSegments values).
-     * @param maxNumKeys    Value containing the number of keys in each segment, if exact value is unknown
-     * then this should be the maximum possible number of values in each segment.
+     *  have numSegments values with each value being <= maxNumKeys).
+     * @param maxNumKeys    Value containing the maximum possible number of values in each segment. This also
+     * indicates the stride of each segment in the input buffer.
      * @param sourcePayload The buffer containing the payload for each key (only 32bit payloads per key are
      *  supported).
      */
@@ -140,22 +148,19 @@ public:
      * Sort a segmented list of keys from smallest to largest.
      * @param sourceBuffer The buffer containing the keys to sort (only 32bit uint or float>=0 are supported).
      * @param numKeys      List containing the number of keys in each segment of the source buffer.
-     * @param maxNumKeys   Value containing the max number of keys in any segment.
      */
-    void sortSegmented(
-        GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys, uint maxNumKeys) noexcept;
+    void sortSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys) noexcept;
 
     /**
      * Sort a segmented list of keys and associated payload from smallest to largest.
      * @param sourceBuffer  The buffer containing the keys to sort (only 32bit uint or float>=0 are
      * supported).
      * @param numKeys       List containing the number of keys in each segment of the source buffer.
-     * @param maxNumKeys    Value containing the max number of keys in any segment.
      * @param sourcePayload The buffer containing the payload for each key (only 32bit payloads per key are
      *  supported).
      */
     void sortPayloadSegmented(GfxBuffer const &sourceBuffer, std::vector<uint> const &numKeys,
-        uint maxNumKeys, GfxBuffer const &sourcePayload) noexcept;
+        GfxBuffer const &sourcePayload) noexcept;
 
 private:
     /** Terminates and cleans up this object. */

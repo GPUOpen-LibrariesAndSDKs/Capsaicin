@@ -26,9 +26,9 @@ THE SOFTWARE.
 namespace Capsaicin
 {
 
-class BrdfLut
+class BrdfLut final
     : public Component
-    , public ComponentFactory::Registrar<BrdfLut>
+    , ComponentFactory::Registrar<BrdfLut>
 {
 public:
     static constexpr std::string_view Name = "BrdfLut";
@@ -36,7 +36,12 @@ public:
     /** Constructor. */
     BrdfLut() noexcept;
 
-    ~BrdfLut() noexcept;
+    ~BrdfLut() noexcept override;
+
+    BrdfLut(BrdfLut const &other)                = delete;
+    BrdfLut(BrdfLut &&other) noexcept            = delete;
+    BrdfLut &operator=(BrdfLut const &other)     = delete;
+    BrdfLut &operator=(BrdfLut &&other) noexcept = delete;
 
     /**
      * Initialise any internal data or state.
@@ -63,7 +68,7 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
 private:
     GfxTexture brdf_lut_buffer_;

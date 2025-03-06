@@ -1,0 +1,120 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "math/color.hlsl"
+
+#define FFX_GPU 1
+#define FFX_HLSL 1
+#define FFX_HLSL_SM 67
+#include "FidelityFX/gpu/ffx_core.h"
+
+uint2 g_BufferDimensions;
+float2 g_InvBufferDimensions;
+
+Texture2D<float4> g_InputBuffer;
+RWTexture2D<float4> g_OutputBuffer;
+SamplerState g_LinearClampSampler;
+
+#ifndef PASSTHROUGH
+float g_BloomClip;
+StructuredBuffer<float> g_Exposure;
+#endif
+
+
+#ifndef BLUR_RADIUS
+#define FFX_BLUR_OPTION_KERNEL_DIMENSION 4
+#else
+#define FFX_BLUR_OPTION_KERNEL_DIMENSION BLUR_RADIUS
+#endif
+#define FFX_BLUR_KERNEL_RANGE            (((FFX_BLUR_OPTION_KERNEL_DIMENSION - 1) / 2) + 1)
+#define FFX_BLUR_KERNEL_RANGE_MINUS1     (FFX_BLUR_KERNEL_RANGE - 1)
+//#define BLUR_ENABLE_INPUT_CACHE 1 // Faster on Navi31
+
+FfxFloat32 BlurLoadKernelWeight(FfxInt32 iKernelIndex)
+{
+    static FfxFloat32 kernel_weights[FFX_BLUR_KERNEL_RANGE] =
+#if FFX_BLUR_KERNEL_RANGE == 2
+    // Sigma: 1.6
+    { 0.3765770884, 0.3117114558 };
+#elif FFX_BLUR_KERNEL_RANGE == 3
+    // Sigma: 1.6
+    { 0.2782163289, 0.230293397, 0.1305984385 };
+#elif FFX_BLUR_KERNEL_RANGE == 4
+    // Sigma: 1.6
+    { 0.2525903052, 0.2090814714, 0.1185692428, 0.0460541333 };
+#elif FFX_BLUR_KERNEL_RANGE == 5
+    // Sigma: 1.6
+    { 0.2465514351, 0.2040828004, 0.115734517, 0.0449530818, 0.0119538834 };
+#elif FFX_BLUR_KERNEL_RANGE == 6
+    // Sigma: 2.8
+    { 0.1491060676, 0.1399880866, 0.1158451582, 0.0844995374, 0.054327293, 0.0307868909 };
+#elif FFX_BLUR_KERNEL_RANGE == 7
+    // Sigma: 2.8
+    { 0.1446570603, 0.1358111404, 0.1123885856, 0.0819782513, 0.0527062824, 0.0298682757, 0.0149189344 };
+#elif FFX_BLUR_KERNEL_RANGE == 8
+    // Sigma: 2.8
+    { 0.1427814521, 0.1340502275, 0.110931367, 0.0809153299, 0.0520228983, 0.0294810068, 0.0147254971, 0.0064829474 };
+#elif FFX_BLUR_KERNEL_RANGE == 9
+    // Sigma: 4
+    { 0.1029336421, 0.0997829119, 0.0908976484, 0.0778120183, 0.0625947824, 0.0473180477, 0.0336134033, 0.0224385526, 0.0140758142 };
+#elif FFX_BLUR_KERNEL_RANGE == 10
+    // Sigma: 4
+    { 0.1012533395, 0.0981540422, 0.089413823, 0.0765418045, 0.0615729768, 0.0465456216, 0.0330646936, 0.0220722627, 0.0138460388, 0.0081620671 };
+#elif FFX_BLUR_KERNEL_RANGE == 11
+    // Sigma: 4
+    { 0.1003459368, 0.0972744146, 0.0886125226, 0.0758558594, 0.0610211779, 0.0461284934, 0.0327683775, 0.0218744576, 0.0137219546, 0.008088921, 0.0044808529 };
+#endif
+    return kernel_weights[iKernelIndex];
+}
+
+FfxFloat32x3 BlurLoadInput(FfxInt32x2 inPxCoord)
+{
+    float3 color = g_InputBuffer.SampleLevel(g_LinearClampSampler, ((float2)(inPxCoord) + 0.5f) * g_InvBufferDimensions, 0).xyz;
+#ifndef PASSTHROUGH
+    // Apply exposure
+    color = g_Exposure[0] * color;
+    // Only pass through clipped values
+    float lum = luminance(color);
+    // Clamp colors to prevent overblown bloom
+    float lumaScale = (g_BloomClip) / lum;
+    color *= lum > g_BloomClip ? lumaScale : max(-squared(5.0f * lum - 5.0f) + g_BloomClip, 0.0f);
+#endif
+    return color;
+}
+
+void BlurStoreOutput(FfxInt32x2 outPxCoord, FfxFloat32x3 color)
+{
+#ifndef PASSTHROUGH
+    // Remove exposure
+    color /= g_Exposure[0];
+#endif
+    g_OutputBuffer[outPxCoord] = float4(color, 1.0f);
+}
+
+#include "FidelityFX/gpu/blur/ffx_blur.h"
+
+[numthreads(FFX_BLUR_TILE_SIZE_X, FFX_BLUR_TILE_SIZE_Y, 1)]
+void main(uint2 gtid : SV_GroupThreadID, uint2 gid : SV_GroupID, uint2 did : SV_DispatchThreadID)
+{
+    // Run fidelityFX blur pass
+    ffxBlur(did, gtid, gid, g_BufferDimensions);
+}

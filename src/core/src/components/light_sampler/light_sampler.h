@@ -31,14 +31,11 @@ class CapsaicinInternal;
 
 class LightSampler : public Component
 {
-    LightSampler(LightSampler const &)            = delete;
-    LightSampler &operator=(LightSampler const &) = delete;
-
 public:
     using Component::Component;
-    using Component::getBuffers;
     using Component::getComponents;
     using Component::getRenderOptions;
+    using Component::getSharedBuffers;
     using Component::init;
     using Component::renderGUI;
     using Component::run;
@@ -49,14 +46,15 @@ public:
      * @param capsaicin Current framework context.
      * @return True if an update occurred requiring internal updates to be performed.
      */
-    virtual bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept = 0;
+    [[nodiscard]] virtual bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
      * @param capsaicin Current framework context.
      * @return A vector with each required define.
      */
-    virtual std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept = 0;
+    [[nodiscard]] virtual std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
      * Add the required program parameters to a shader based on current settings.
@@ -64,20 +62,20 @@ public:
      * @param program   The shader program to bind parameters to.
      */
     virtual void addProgramParameters(
-        CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept = 0;
+        CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept = 0;
 
     /**
-     * Check if the scenes lighting data was changed this frame.
+     * Check if the light settings have changed (i.e. enabled/disabled lights).
      * @param capsaicin Current framework context.
-     * @returns True if light data has changed.
+     * @return True if light settings have changed.
      */
-    virtual bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept = 0;
+    [[nodiscard]] virtual bool getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept = 0;
 
     /**
      * Get the name of the header file used in HLSL code to include necessary sampler functions.
      * @return String name of the HLSL header include.
      */
-    virtual std::string_view getHeaderFile() const noexcept = 0;
+    [[nodiscard]] virtual std::string_view getHeaderFile() const noexcept = 0;
 };
 
 class LightSamplerFactory : public Factory<LightSampler>

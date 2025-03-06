@@ -8,14 +8,17 @@ AlignConsecutiveAssignments: Consecutive
 AlignConsecutiveBitFields: Consecutive
 AlignConsecutiveDeclarations: Consecutive
 AlignConsecutiveMacros: Consecutive
+#AlignConsecutiveShortCaseStatements: true 
 AlignEscapedNewlines: Left
 AlignOperands: AlignAfterOperator
 AlignTrailingComments: true
 AllowAllArgumentsOnNextLine: true
 AllowAllConstructorInitializersOnNextLine: true
 AllowAllParametersOfDeclarationOnNextLine: true
+#AllowBreakBeforeNoexceptSpecifier: Never
 AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: true
+#AllowShortCompoundRequirementOnASingleLine: true
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLambdasOnASingleLine: Inline
@@ -45,6 +48,9 @@ BraceWrapping:
   SplitEmptyFunction: false
   SplitEmptyRecord: false
   SplitEmptyNamespace: false
+#BreakAdjacentStringLiterals: true
+BreakAfterAttributes: Never
+#BreakAfterReturnType: Automatic
 BreakBeforeBinaryOperators: NonAssignment
 BreakBeforeBraces: Custom
 BreakBeforeConceptDeclarations: true
@@ -52,6 +58,7 @@ BreakBeforeTernaryOperators: true
 BreakConstructorInitializers: BeforeComma
 BreakInheritanceList: BeforeComma
 BreakStringLiterals: false
+#BreakTemplateDeclarations: Yes
 ColumnLimit: 110
 CompactNamespaces: false
 ConstructorInitializerIndentWidth: 4
@@ -77,12 +84,16 @@ IndentCaseLabels: false
 IndentExternBlock: NoIndent
 IndentGotoLabels: false
 IndentPPDirectives: AfterHash
-IndentRequires: false
+IndentRequiresClause: false
 IndentWidth: 4
 IndentWrappedFunctionNames: false
-#InsertTrailingCommas: Wrapped
+InsertBraces: true
+InsertNewlineAtEOF: true
+KeepEmptyLinesAtEOF: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 LambdaBodyIndentation: Signature
+LineEnding: LF
+#MainIncludeChar: Quote
 MaxEmptyLinesToKeep: 1
 NamespaceIndentation: None
 PPIndentWidth: -1
@@ -92,8 +103,13 @@ QualifierAlignment: Custom
 QualifierOrder: ['inline', 'static', 'constexpr', 'volatile', 'type', 'restrict', 'const' ]
 ReferenceAlignment: Pointer
 ReflowComments: true
+RemoveParentheses: Leave
+RemoveSemicolon: true
+RequiresClausePosition: OwnLine
+RequiresExpressionIndentation: OuterScope
 SeparateDefinitionBlocks: Always
 ShortNamespaceLines: 0
+#SkipMacroDefinitionBody: false
 SortIncludes: true
 SortUsingDeclarations: true
 SpaceAfterCStyleCast: false
@@ -118,6 +134,7 @@ SpacesInContainerLiterals: false
 SpacesInLineCommentPrefix:
   Minimum: 1
   Maximum: 1
+SpacesInParens: Never
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
 TabWidth: 4

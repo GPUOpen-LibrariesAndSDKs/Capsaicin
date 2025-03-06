@@ -25,11 +25,16 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class Atmosphere : public RenderTechnique
+class Atmosphere final : public RenderTechnique
 {
 public:
     Atmosphere();
-    ~Atmosphere();
+    ~Atmosphere() override;
+
+    Atmosphere(Atmosphere const &other)                = delete;
+    Atmosphere(Atmosphere &&other) noexcept            = delete;
+    Atmosphere &operator=(Atmosphere const &other)     = delete;
+    Atmosphere &operator=(Atmosphere &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -45,7 +50,7 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 

@@ -46,22 +46,22 @@ public:
      * @param elementOffset The element offset into input buffer to start new buffer view.
      * @param count         Number of elements from input to add to new buffer view.
      */
-    inline BufferView(
-        GfxContext const &context, GfxBuffer const &bufferIn, uint elementOffset, uint count) noexcept
+    BufferView(GfxContext const &context, GfxBuffer const &bufferIn, uint const elementOffset,
+        uint const count) noexcept
         : buffer(gfxCreateBufferRange<T>(context, bufferIn, elementOffset, count))
         , gfx(context)
     {
         std::string       name = bufferIn.getName();
-        const std::string number(std::to_string(elementOffset));
+        std::string const number(std::to_string(elementOffset));
         if ((name.length() + number.length() + 1) > kGfxConstant_MaxNameLength)
         {
             name.resize(-1LL - number.length() + kGfxConstant_MaxNameLength);
         }
         name.append(number);
-        buffer.setName(name.data());
+        buffer.setName(name.c_str());
     }
 
     /** Destructor. */
-    inline ~BufferView() noexcept { gfxDestroyBuffer(gfx, buffer); }
+    ~BufferView() noexcept { gfxDestroyBuffer(gfx, buffer); }
 };
 } // namespace Capsaicin

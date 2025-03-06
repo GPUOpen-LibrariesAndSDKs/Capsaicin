@@ -27,29 +27,30 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class LightSamplerUniform
+class LightSamplerUniform final
     : public LightSampler
-    , public ComponentFactory::Registrar<LightSamplerUniform>
-    , public LightSamplerFactory::Registrar<LightSamplerUniform>
+    , ComponentFactory::Registrar<LightSamplerUniform>
+    , LightSamplerFactory::Registrar<LightSamplerUniform>
 {
 public:
     static constexpr std::string_view Name = "LightSamplerUniform";
-
-    LightSamplerUniform(LightSamplerUniform const &) noexcept = delete;
-
-    LightSamplerUniform(LightSamplerUniform &&) noexcept = default;
 
     /** Constructor. */
     LightSamplerUniform() noexcept;
 
     /** Destructor. */
-    ~LightSamplerUniform() noexcept;
+    ~LightSamplerUniform() noexcept override;
+
+    LightSamplerUniform(LightSamplerUniform const &other)                = delete;
+    LightSamplerUniform(LightSamplerUniform &&other) noexcept            = delete;
+    LightSamplerUniform &operator=(LightSamplerUniform const &other)     = delete;
+    LightSamplerUniform &operator=(LightSamplerUniform &&other) noexcept = delete;
 
     /**
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -76,7 +77,7 @@ public:
      * @param capsaicin Current framework context.
      * @return True if an update occurred requiring internal updates to be performed.
      */
-    bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
@@ -84,7 +85,8 @@ public:
      * @param capsaicin Current framework context.
      * @return A vector with each required define.
      */
-    std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Add the required program parameters to a shader based on current settings.
@@ -92,21 +94,20 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept override;
+    void addProgramParameters(
+        CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept override;
 
     /**
-     * Check if the scenes lighting data was changed this frame.
+     * Check if the light settings have changed (i.e. enabled/disabled lights).
      * @param capsaicin Current framework context.
-     * @returns True if light data has changed.
+     * @return True if light settings have changed.
      */
-    bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the name of the header file used in HLSL code to include necessary sampler functions.
      * @return String name of the HLSL header include.
      */
-    virtual std::string_view getHeaderFile() const noexcept override;
-
-private:
+    [[nodiscard]] std::string_view getHeaderFile() const noexcept override;
 };
 } // namespace Capsaicin

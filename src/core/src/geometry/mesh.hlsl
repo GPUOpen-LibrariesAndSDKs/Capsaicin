@@ -27,9 +27,12 @@ THE SOFTWARE.
 // Requires the following data to be defined in any shader that uses this file
 StructuredBuffer<uint> g_IndexBuffer;
 StructuredBuffer<Vertex> g_VertexBuffer;
+uint g_VertexDataIndex;
+// Additionally requires following data if HAS_PREVIOUS_INTERSECT is defined
+uint g_PrevVertexDataIndex;
 */
 
-#include "../gpu_shared.h"
+#include "gpu_shared.h"
 
 struct Triangle
 {
@@ -80,21 +83,24 @@ struct UVs
 
 /**
  * Fetch the vertices for a given triangle.
- * @param mesh           The mesh the triangle is located within.
+ * @param instance       The instance the triangle belongs to.
  * @param primitiveIndex The index of the primitive within the mesh.
  * @return The triangle data.
  */
-Triangle fetchVertices(Mesh mesh, uint primitiveIndex)
+Triangle fetchVertices(Instance instance, uint primitiveIndex)
 {
-    // Get index buffer values
-    uint i0 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 0] + mesh.vertex_offset_idx;
-    uint i1 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 1] + mesh.vertex_offset_idx;
-    uint i2 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 2] + mesh.vertex_offset_idx;
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
 
-    // Get vertex values from buffers
-    float3 v0 = g_VertexBuffer[i0].position.xyz;
-    float3 v1 = g_VertexBuffer[i1].position.xyz;
-    float3 v2 = g_VertexBuffer[i2].position.xyz;
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
 
     Triangle ret = {v0, v1, v2};
     return ret;
@@ -102,26 +108,29 @@ Triangle fetchVertices(Mesh mesh, uint primitiveIndex)
 
 /**
  * Fetch the vertices and UVs for a given triangle.
- * @param mesh           The mesh the triangle is located within.
+ * @param instance       The instance the triangle belongs to.
  * @param primitiveIndex The index of the primitive within the mesh.
  * @return The triangle data.
  */
-TriangleUV fetchVerticesUV(Mesh mesh, uint primitiveIndex)
+TriangleUV fetchVerticesUV(Instance instance, uint primitiveIndex)
 {
-    // Get index buffer values
-    uint i0 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 0] + mesh.vertex_offset_idx;
-    uint i1 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 1] + mesh.vertex_offset_idx;
-    uint i2 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 2] + mesh.vertex_offset_idx;
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
 
-    // Get vertex values from buffers
-    float3 v0 = g_VertexBuffer[i0].position.xyz;
-    float3 v1 = g_VertexBuffer[i1].position.xyz;
-    float3 v2 = g_VertexBuffer[i2].position.xyz;
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
 
     // Get UV values from buffers
-    float2 uv0 = g_VertexBuffer[i0].uv;
-    float2 uv1 = g_VertexBuffer[i1].uv;
-    float2 uv2 = g_VertexBuffer[i2].uv;
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
 
     TriangleUV ret = {v0, v1, v2, uv0, uv1, uv2};
     return ret;
@@ -129,26 +138,29 @@ TriangleUV fetchVerticesUV(Mesh mesh, uint primitiveIndex)
 
 /**
  * Fetch the vertices and normals for a given triangle.
- * @param mesh           The mesh the triangle is located within.
+ * @param instance       The instance the triangle belongs to.
  * @param primitiveIndex The index of the primitive within the mesh.
  * @return The triangle data.
  */
-TriangleNorm fetchVerticesNorm(Mesh mesh, uint primitiveIndex)
+TriangleNorm fetchVerticesNorm(Instance instance, uint primitiveIndex)
 {
-    // Get index buffer values
-    uint i0 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 0] + mesh.vertex_offset_idx;
-    uint i1 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 1] + mesh.vertex_offset_idx;
-    uint i2 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 2] + mesh.vertex_offset_idx;
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
 
-    // Get vertex values from buffers
-    float3 v0 = g_VertexBuffer[i0].position.xyz;
-    float3 v1 = g_VertexBuffer[i1].position.xyz;
-    float3 v2 = g_VertexBuffer[i2].position.xyz;
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
 
     // Get normal values from buffers
-    float3 n0 = g_VertexBuffer[i0].normal.xyz;
-    float3 n1 = g_VertexBuffer[i1].normal.xyz;
-    float3 n2 = g_VertexBuffer[i2].normal.xyz;
+    float3 n0 = g_VertexBuffer[i0].getNormal();
+    float3 n1 = g_VertexBuffer[i1].getNormal();
+    float3 n2 = g_VertexBuffer[i2].getNormal();
 
     TriangleNorm ret = {v0, v1, v2, n0, n1, n2};
     return ret;
@@ -156,31 +168,34 @@ TriangleNorm fetchVerticesNorm(Mesh mesh, uint primitiveIndex)
 
 /**
  * Fetch the vertices, normals and UVs for a given triangle.
- * @param mesh           The mesh the triangle is located within.
+ * @param instance       The instance the triangle belongs to.
  * @param primitiveIndex The index of the primitive within the mesh.
  * @return The triangle data.
  */
-TriangleNormUV fetchVerticesNormUV(Mesh mesh, uint primitiveIndex)
+TriangleNormUV fetchVerticesNormUV(Instance instance, uint primitiveIndex)
 {
-    // Get index buffer values
-    uint i0 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 0] + mesh.vertex_offset_idx;
-    uint i1 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 1] + mesh.vertex_offset_idx;
-    uint i2 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 2] + mesh.vertex_offset_idx;
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
 
-    // Get vertex values from buffers
-    float3 v0 = g_VertexBuffer[i0].position.xyz;
-    float3 v1 = g_VertexBuffer[i1].position.xyz;
-    float3 v2 = g_VertexBuffer[i2].position.xyz;
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
 
     // Get normal values from buffers
-    float3 n0 = g_VertexBuffer[i0].normal.xyz;
-    float3 n1 = g_VertexBuffer[i1].normal.xyz;
-    float3 n2 = g_VertexBuffer[i2].normal.xyz;
+    float3 n0 = g_VertexBuffer[i0].getNormal();
+    float3 n1 = g_VertexBuffer[i1].getNormal();
+    float3 n2 = g_VertexBuffer[i2].getNormal();
 
     // Get UV values from buffers
-    float2 uv0 = g_VertexBuffer[i0].uv;
-    float2 uv1 = g_VertexBuffer[i1].uv;
-    float2 uv2 = g_VertexBuffer[i2].uv;
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
 
     TriangleNormUV ret = {v0, v1, v2, n0, n1, n2, uv0, uv1, uv2};
     return ret;
@@ -188,24 +203,202 @@ TriangleNormUV fetchVerticesNormUV(Mesh mesh, uint primitiveIndex)
 
 /**
  * Fetch the UVs for a given triangle.
- * @param mesh           The mesh the triangle is located within.
+ * @param instance       The instance the triangle belongs to.
  * @param primitiveIndex The index of the primitive within the mesh.
  * @return The triangle data.
  */
-UVs fetchUVs(Mesh mesh, uint primitiveIndex)
+UVs fetchUVs(Instance instance, uint primitiveIndex)
 {
     // Get index buffer values
-    uint i0 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 0] + mesh.vertex_offset_idx;
-    uint i1 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 1] + mesh.vertex_offset_idx;
-    uint i2 = g_IndexBuffer[mesh.index_offset_idx + 3 * primitiveIndex + 2] + mesh.vertex_offset_idx;
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_VertexDataIndex];
 
     // Get UV values from buffers
-    float2 uv0 = g_VertexBuffer[i0].uv;
-    float2 uv1 = g_VertexBuffer[i1].uv;
-    float2 uv2 = g_VertexBuffer[i2].uv;
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
 
     UVs ret = {uv0, uv1, uv2};
     return ret;
 }
+
+#ifdef HAS_PREVIOUS_INTERSECT
+
+/**
+ * Fetch the vertices from last frame for a given triangle.
+ * @param instance       The instance the triangle belongs to.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+Triangle fetchPrevVertices(Instance instance, uint primitiveIndex)
+{
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
+
+    Triangle ret = {v0, v1, v2};
+    return ret;
+}
+
+/**
+ * Checks if instance was previously animated last frame.
+ * @param instance The instance the triangle belongs to.
+ */
+bool isInstanceVolatile(Instance instance)
+{
+    return (g_VertexDataIndex != g_PrevVertexDataIndex) &&
+        (instance.vertex_offset_idx[0] != instance.vertex_offset_idx[1]);
+}
+
+/**
+ * Fetch the vertices from last frame for a given triangle. Avoids redundant
+ * fetch if these are guaranteed to be equal to current frame vertices.
+ * @param instance       The instance the triangle belongs to.
+ * @param vertices       The current frame vertices of the given triangle.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+Triangle fetchPrevVertices(Instance instance, Triangle vertices, uint primitiveIndex)
+{
+    if (!isInstanceVolatile(instance))
+        return vertices;
+
+    return fetchPrevVertices(instance, primitiveIndex);
+}
+
+/**
+ * Fetch the vertices and UVs from last frame for a given triangle.
+ * @param instance       The instance the triangle belongs to.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+TriangleUV fetchPrevVerticesUV(Instance instance, uint primitiveIndex)
+{
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
+
+    // Get UV values from buffers
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
+
+    TriangleUV ret = {v0, v1, v2, uv0, uv1, uv2};
+    return ret;
+}
+
+/**
+ * Fetch the vertices and normals from last frame for a given triangle.
+ * @param instance       The instance the triangle belongs to.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+TriangleNorm fetchPrevVerticesNorm(Instance instance, uint primitiveIndex)
+{
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
+
+    // Get normal values from buffers
+    float3 n0 = g_VertexBuffer[i0].getNormal();
+    float3 n1 = g_VertexBuffer[i1].getNormal();
+    float3 n2 = g_VertexBuffer[i2].getNormal();
+
+    TriangleNorm ret = {v0, v1, v2, n0, n1, n2};
+    return ret;
+}
+
+/**
+ * Fetch the vertices, normals and UVs from last frame for a given triangle.
+ * @param instance       The instance the triangle belongs to.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+TriangleNormUV fetchPrevVerticesNormUV(Instance instance, uint primitiveIndex)
+{
+    // Get index values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+
+    // Get position values from buffers
+    float3 v0 = g_VertexBuffer[i0].getPosition();
+    float3 v1 = g_VertexBuffer[i1].getPosition();
+    float3 v2 = g_VertexBuffer[i2].getPosition();
+
+    // Get normal values from buffers
+    float3 n0 = g_VertexBuffer[i0].getNormal();
+    float3 n1 = g_VertexBuffer[i1].getNormal();
+    float3 n2 = g_VertexBuffer[i2].getNormal();
+
+    // Get UV values from buffers
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
+
+    TriangleNormUV ret = {v0, v1, v2, n0, n1, n2, uv0, uv1, uv2};
+    return ret;
+}
+
+/**
+ * Fetch the UVs from last frame for a given triangle.
+ * @param instance       The instance the triangle belongs to.
+ * @param primitiveIndex The index of the primitive within the mesh.
+ * @return The triangle data.
+ */
+UVs fetchPrevUVs(Instance instance, uint primitiveIndex)
+{
+    // Get index buffer values
+    uint i0 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 0] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i1 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 1] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+    uint i2 = g_IndexBuffer[instance.index_offset_idx + 3 * primitiveIndex + 2] +
+        instance.vertex_offset_idx[g_PrevVertexDataIndex];
+
+    // Get UV values from buffers
+    float2 uv0 = g_VertexBuffer[i0].getUV();
+    float2 uv1 = g_VertexBuffer[i1].getUV();
+    float2 uv2 = g_VertexBuffer[i2].getUV();
+
+    UVs ret = {uv0, uv1, uv2};
+    return ret;
+}
+
+#endif // HAS_PREVIOUS_INTERSECT
 
 #endif // MESH_HLSL

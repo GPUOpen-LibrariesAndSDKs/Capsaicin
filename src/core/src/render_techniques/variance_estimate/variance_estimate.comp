@@ -21,8 +21,8 @@ THE SOFTWARE.
 ********************************************************************/
 #define GROUP_SIZE 16
 
-#include "../../math/math.hlsl"
-#include "../../math/color.hlsl"
+#include "math/math.hlsl"
+#include "math/color.hlsl"
 
 uint2 g_BufferDimensions;
 

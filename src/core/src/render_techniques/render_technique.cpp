@@ -37,12 +37,12 @@ ComponentList RenderTechnique::getComponents() const noexcept
     return {};
 }
 
-BufferList RenderTechnique::getBuffers() const noexcept
+SharedBufferList RenderTechnique::getSharedBuffers() const noexcept
 {
     return {};
 }
 
-AOVList RenderTechnique::getAOVs() const noexcept
+SharedTextureList RenderTechnique::getSharedTextures() const noexcept
 {
     return {};
 }

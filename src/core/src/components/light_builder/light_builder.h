@@ -25,9 +25,9 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class LightBuilder
+class LightBuilder final
     : public Component
-    , public ComponentFactory::Registrar<LightBuilder>
+    , ComponentFactory::Registrar<LightBuilder>
 {
 public:
     static constexpr std::string_view Name = "LightBuilder";
@@ -35,39 +35,51 @@ public:
     /** Constructor. */
     LightBuilder() noexcept;
 
-    LightBuilder(LightBuilder const &) noexcept = delete;
-
-    LightBuilder(LightBuilder &&) noexcept = default;
-
     /** Destructor. */
-    virtual ~LightBuilder() noexcept;
+    ~LightBuilder() noexcept override;
+
+    LightBuilder(LightBuilder const &other)                = delete;
+    LightBuilder(LightBuilder &&other) noexcept            = delete;
+    LightBuilder &operator=(LightBuilder const &other)     = delete;
+    LightBuilder &operator=(LightBuilder &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
      * @return A list of all valid configuration options.
      */
-    RenderOptionList getRenderOptions() noexcept;
+    RenderOptionList getRenderOptions() noexcept override;
 
     struct RenderOptions
     {
         bool delta_light_enable       = true; /**< True to enable delta light in light sampling */
         bool area_light_enable        = true; /**< True to enable area lights in light sampling */
         bool environment_light_enable = true; /**< True to enable environment lights in light sampling */
+        bool environment_light_cosine_enable =
+            false; /**< True to enable cosine sampling environment lights */
+        bool low_emission_area_lights_disable =
+            false;                           /**< True to disable area lights with low base emission */
+        float low_emission_threshold = 1.0F; /**< Luminance threshold for selecting low emission lights */
     };
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
+
+    /**
+     * Gets a list of any shared buffers used by the current component.
+     * @return A list of all supported buffers.
+     */
+    [[nodiscard]] SharedBufferList getSharedBuffers() const noexcept override;
 
     /**
      * Initialise any internal data or state.
      * @note This is automatically called by the framework after construction and should be used to create
      * any required CPU|GPU resources.
      * @param capsaicin Current framework context.
-     * @returns True if initialisation succeeded, False otherwise.
+     * @return True if initialisation succeeded, False otherwise.
      */
     bool init(CapsaicinInternal const &capsaicin) noexcept override;
 
@@ -91,81 +103,86 @@ public:
     /**
      * Check to determine if any kernels using light sampler code need to be (re)compiled.
      * @param capsaicin Current framework context.
-     * @returns True if an update occurred requiring internal updates to be performed.
+     * @return True if an update occurred requiring internal updates to be performed.
      */
-    virtual bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept;
+    [[nodiscard]] bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses the lightSampler.
      * @param capsaicin Current framework context.
-     * @returns A vector with each required define.
+     * @return A vector with each required define.
      */
-    virtual std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept;
+    [[nodiscard]] std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept;
 
     /**
      * Add the required program parameters to a shader based on current settings.
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    virtual void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
     /**
      * Gets count of enabled area lights in current scene.
-     * @returns The area light count.
+     * @return The area light count.
      */
-    uint32_t getAreaLightCount() const;
+    [[nodiscard]] uint32_t getAreaLightCount() const;
 
     /**
      * Gets count of enabled delta lights (point,spot,direction) in current scene.
-     * @returns The delta light count.
+     * @return The delta light count.
      */
-    uint32_t getDeltaLightCount() const;
+    [[nodiscard]] uint32_t getDeltaLightCount() const;
 
     /**
      * Gets approximate light count within the light buffer.
      * The light count is a maximum upper bound of possible lights in the light list. Since lights are culled
      * on the GPU it takes several frames for the exact value to be read back.
      * This should not be used in ant shader operations as @getLightCountBuffer() should be used instead.
-     * @returns The light count.
+     * @return The light count.
      */
-    uint32_t getLightCount() const;
+    [[nodiscard]] uint32_t getLightCount() const;
 
     /**
      * Check if the scenes lighting data was changed this frame.
-     * @returns True if light data has changed.
+     * @return True if light data has changed.
      */
-    bool getLightsUpdated() const;
+    [[nodiscard]] bool getLightsUpdated() const;
 
     /**
      * Check if the light settings have changed (i.e. enabled/disabled lights).
-     * @returns True if light settings have changed.
+     * @return True if light settings have changed.
      */
-    bool getLightSettingsUpdated() const;
+    [[nodiscard]] bool getLightSettingsUpdated() const;
+
+    /**
+     * Check if the light list indexes have changed (i.e. lights added/removed).
+     * @note A value of true here indicates that light IDs from the previous frame will not match the IDs from
+     * the current.
+     * @return True if light indexes has changed.
+     */
+    [[nodiscard]] bool getLightIndexesChanged() const;
 
 private:
     RenderOptions options;
 
-    uint32_t areaLightTotal      = 0; /**< Number of area lights in meshes (may not be all enabled) */
-    size_t   lightHash           = 0;
-    uint32_t areaLightMaxCount   = 0; /**< Max number of area lights in light buffer */
-    uint32_t areaLightCount      = 0; /**< Approximate number of area lights in light buffer */
-    uint32_t deltaLightCount     = 0; /**< Number of delta lights in light buffer */
+    size_t   lightHash       = 0;
+    uint32_t areaLightTotal  = std::numeric_limits<uint32_t>::max(); /**< Number of area lights in meshes */
+    uint32_t areaLightCount  = 0;     /**< Number of area lights in light buffer */
+    uint32_t deltaLightCount = 0;     /**< Number of delta lights in light buffer */
     uint32_t environmentMapCount = 0; /**< Number of environment map lights in buffer */
-    uint32_t lightBufferIndex    = 0; /**< Index of currently active light buffer */
 
-    bool lightsUpdated       = true;
-    bool lightSettingChanged = true;
+    bool lightsUpdated        = true;
+    bool lightSettingsChanged = true;
+    bool lightIndexesChanged  = true;
+    bool lightsUpdatedBack    = false;
 
-    GfxBuffer lightBuffers[2];        /**< Buffers used to hold all light list */
-    GfxBuffer lightCountBuffer;       /**< Buffer used to hold number of lights in light buffer */
-    GfxBuffer lightInstanceBuffer;    /**< Buffer used to hold the offset of the instance primitives */
-    GfxBuffer
-        lightInstancePrimitiveBuffer; /**< Buffer used to hold the light identifier per emissive primitive */
-    std::vector<std::pair<bool, GfxBuffer>>
-        lightCountBufferTemp; /**< Buffer used to copy light count into cpu memory */
+    GfxBuffer lightBuffer;         /**< Buffers used to hold all light list (present) */
+    GfxBuffer lightCountBuffer;    /**< Buffer used to hold number of lights in light buffer */
+    GfxBuffer lightInstanceBuffer; /**< Buffer used to hold the offset into light buffer for first primitive
+                                      of an instance */
 
-    GfxKernel  countAreaLightsKernel;
-    GfxKernel  scatterAreaLightsKernel;
     GfxProgram gatherAreaLightsProgram;
+    GfxKernel  gatherAreaLightsKernel;
 };
 } // namespace Capsaicin

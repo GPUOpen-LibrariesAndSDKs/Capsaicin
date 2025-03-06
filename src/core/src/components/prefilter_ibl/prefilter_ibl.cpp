@@ -24,9 +24,8 @@ THE SOFTWARE.
 
 #include "capsaicin_internal.h"
 
-#define _USE_MATH_DEFINES
 #include <algorithm>
-#include <math.h>
+#include <numbers>
 
 namespace Capsaicin
 {
@@ -45,8 +44,7 @@ bool PrefilterIBL::init(CapsaicinInternal const &capsaicin) noexcept
         gfx_, prefilter_ibl_buffer_size_, DXGI_FORMAT_R16G16B16A16_FLOAT, prefilter_ibl_buffer_mips_);
     prefilter_ibl_buffer_.setName("Capsaicin_PrefilterIBL_PrefilterIBLBuffer");
 
-    prefilter_ibl_program_ =
-        gfxCreateProgram(gfx_, "components/prefilter_ibl/prefilter_ibl", capsaicin.getShaderPath());
+    prefilter_ibl_program_ = capsaicin.createProgram("components/prefilter_ibl/prefilter_ibl");
 
     // init prefiltered IBL
     prefilterIBL(capsaicin);
@@ -56,7 +54,7 @@ bool PrefilterIBL::init(CapsaicinInternal const &capsaicin) noexcept
 
 void PrefilterIBL::run(CapsaicinInternal &capsaicin) noexcept
 {
-    // update prefilted IBL
+    // update prefiltered IBL
     if (capsaicin.getEnvironmentMapUpdated())
     {
         prefilterIBL(capsaicin);
@@ -70,18 +68,18 @@ void PrefilterIBL::terminate() noexcept
 }
 
 void PrefilterIBL::addProgramParameters(
-    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_PrefilteredEnvironmentBuffer", prefilter_ibl_buffer_);
 }
 
-void PrefilterIBL::prefilterIBL(CapsaicinInternal const &capsaicin) noexcept
+void PrefilterIBL::prefilterIBL(CapsaicinInternal const &capsaicin) const noexcept
 {
-    glm::dvec3 const forward_vectors[] = {glm::dvec3(-1.0, 0.0, 0.0), glm::dvec3(1.0, 0.0, 0.0),
+    constexpr std::array forward_vectors = {glm::dvec3(-1.0, 0.0, 0.0), glm::dvec3(1.0, 0.0, 0.0),
         glm::dvec3(0.0, 1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, 0.0, -1.0),
         glm::dvec3(0.0, 0.0, 1.0)};
 
-    glm::dvec3 const up_vectors[] = {glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0),
+    constexpr std::array up_vectors = {glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0),
         glm::dvec3(0.0, 0.0, -1.0), glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(0.0, -1.0, 0.0),
         glm::dvec3(0.0, -1.0, 0.0)};
 
@@ -89,21 +87,22 @@ void PrefilterIBL::prefilterIBL(CapsaicinInternal const &capsaicin) noexcept
     {
         for (uint32_t cubemap_face = 0; cubemap_face < 6; ++cubemap_face)
         {
-            GfxDrawState draw_sky_state = {};
-            gfxDrawStateSetColorTarget(draw_sky_state, 0, prefilter_ibl_buffer_, mip_level, cubemap_face);
+            GfxDrawState const draw_sky_state = {};
+            gfxDrawStateSetColorTarget(draw_sky_state, 0, prefilter_ibl_buffer_.getFormat());
 
-            GfxKernel prefilter_ibl_kernel =
+            GfxKernel const prefilter_ibl_kernel =
                 gfxCreateGraphicsKernel(gfx_, prefilter_ibl_program_, draw_sky_state, "PrefilterIBL");
 
-            uint32_t const buffer_dimensions[] = {std::max(prefilter_ibl_buffer_size_ >> mip_level, 1u),
-                std::max(prefilter_ibl_buffer_size_ >> mip_level, 1u)};
+            uint2 const buffer_dimensions = {std::max(prefilter_ibl_buffer_size_ >> mip_level, 1U),
+                std::max(prefilter_ibl_buffer_size_ >> mip_level, 1U)};
 
             glm::dmat4 const view =
-                glm::lookAt(glm::dvec3(0.0), forward_vectors[cubemap_face], up_vectors[cubemap_face]);
-            glm::dmat4 const proj          = glm::perspective(M_PI / 2.0, 1.0, 0.1, 1e4);
-            glm::mat4 const  view_proj_inv = glm::mat4(glm::inverse(proj * view));
+                lookAt(glm::dvec3(0.0), forward_vectors[cubemap_face], up_vectors[cubemap_face]);
+            glm::dmat4 const proj = glm::perspective(std::numbers::pi_v<double> / 2.0, 1.0, 0.1, 1e4);
+            auto const       view_proj_inv = glm::mat4(inverse(proj * view));
 
-            float const roughness = mip_level / float(prefilter_ibl_buffer_mips_ - 1);
+            float const roughness =
+                static_cast<float>(mip_level) / static_cast<float>(prefilter_ibl_buffer_mips_ - 1);
 
             gfxProgramSetParameter(gfx_, prefilter_ibl_program_, "g_BufferDimensions", buffer_dimensions);
             gfxProgramSetParameter(gfx_, prefilter_ibl_program_, "g_ViewProjectionInverse", view_proj_inv);
@@ -114,6 +113,7 @@ void PrefilterIBL::prefilterIBL(CapsaicinInternal const &capsaicin) noexcept
             gfxProgramSetParameter(gfx_, prefilter_ibl_program_, "g_Roughness", roughness);
             gfxProgramSetParameter(gfx_, prefilter_ibl_program_, "g_SampleSize", prefilter_ibl_sample_size_);
 
+            gfxCommandBindColorTarget(gfx_, 0, prefilter_ibl_buffer_, mip_level, cubemap_face);
             gfxCommandBindKernel(gfx_, prefilter_ibl_kernel);
             gfxCommandDraw(gfx_, 3);
 

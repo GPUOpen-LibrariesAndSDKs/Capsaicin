@@ -68,20 +68,20 @@ public:
     {}
 
     constexpr explicit StaticString(char (&&other)[Size + 1]) noexcept
-        : dataArray(std::to_array(std::move(data)))
+        : dataArray(std::to_array(std::move(other)))
     {}
 
     static constexpr size_t npos = std::numeric_limits<size_t>::max();
 
     /**
      * Convert to standard string.
-     * @returns New string containing copy of current string contents.
+     * @return New string containing copy of current string contents.
      */
     explicit operator std::string() const { return std::string {dataArray.begin(), dataArray.end()}; }
 
     /**
      * Convert to standard string view.
-     * @returns String view referencing current string contents.
+     * @return String view referencing current string contents.
      */
     explicit constexpr operator std::string_view() const noexcept
     {
@@ -96,111 +96,111 @@ public:
 
     /**
      * Get pointer to internal string data.
-     * @returns Memory pointer to string data.
+     * @return Memory pointer to string data.
      */
     constexpr char *data() noexcept { return dataArray.data(); }
 
-    constexpr char const *data() const noexcept { return dataArray.data(); }
+    [[nodiscard]] constexpr char const *data() const noexcept { return dataArray.data(); }
 
     /**
      * Get contents of string as a C-style string pointer.
-     * @returns String pointer to internal data.
+     * @return String pointer to internal data.
      */
-    constexpr char const *c_str() const noexcept { return dataArray.data(); }
+    [[nodiscard]] constexpr char const *c_str() const noexcept { return dataArray.data(); }
 
     /**
      * Return iterator to beginning of string.
-     * @returns Iterator to beginning of string.
+     * @return Iterator to beginning of string.
      */
     constexpr auto begin() noexcept { return dataArray.begin(); }
 
-    constexpr auto begin() const noexcept { return dataArray.begin(); }
+    [[nodiscard]] constexpr auto begin() const noexcept { return dataArray.begin(); }
 
     /**
      * Return const iterator to beginning of string.
-     * @returns Constant iterator to beginning of string.
+     * @return Constant iterator to beginning of string.
      */
-    constexpr auto cbegin() const noexcept { return dataArray.cbegin(); }
+    [[nodiscard]] constexpr auto cbegin() const noexcept { return dataArray.cbegin(); }
 
     /**
      * Return iterator to end of string.
-     * @returns Iterator to end of string.
+     * @return Iterator to end of string.
      */
     constexpr auto end() noexcept { return dataArray.end() - 1; }
 
-    constexpr auto end() const noexcept { return dataArray.end() - 1; }
+    [[nodiscard]] constexpr auto end() const noexcept { return dataArray.end() - 1; }
 
     /**
      * Return const iterator to end of string.
-     * @returns Constant iterator to end of string.
+     * @return Constant iterator to end of string.
      */
-    constexpr auto cend() const noexcept { return dataArray.cend() - 1; }
+    [[nodiscard]] constexpr auto cend() const noexcept { return dataArray.cend() - 1; }
 
     /**
      * Return reverse iterator to last element in string.
-     * @returns Reverse iterator to last element in string.
+     * @return Reverse iterator to last element in string.
      */
     constexpr auto rbegin() noexcept { return dataArray.rbegin(); }
 
-    constexpr auto rbegin() const noexcept { return dataArray.rbegin(); }
+    [[nodiscard]] constexpr auto rbegin() const noexcept { return dataArray.rbegin(); }
 
     /**
      * Return const reverse  to last element in string.
-     * @returns Constant reverse iterator to last element in string.
+     * @return Constant reverse iterator to last element in string.
      */
-    constexpr auto crbegin() const noexcept { return dataArray.crbegin(); }
+    [[nodiscard]] constexpr auto crbegin() const noexcept { return dataArray.crbegin(); }
 
     /**
      * Return reverse iterator to start of string.
-     * @returns Reverse iterator to start of string.
+     * @return Reverse iterator to start of string.
      */
     constexpr auto rend() noexcept { return dataArray.rend() - 1; }
 
-    constexpr auto rend() const noexcept { return dataArray.rend() - 1; }
+    [[nodiscard]] constexpr auto rend() const noexcept { return dataArray.rend() - 1; }
 
     /**
      * Return const reverse iterator to start of string.
-     * @returns Constant reverse iterator to start of string.
+     * @return Constant reverse iterator to start of string.
      */
-    constexpr auto crend() const noexcept { return dataArray.crend() - 1; }
+    [[nodiscard]] constexpr auto crend() const noexcept { return dataArray.crend() - 1; }
 
     /**
      * Get size of the string.
-     * @returns String size in bytes.
+     * @return String size in bytes.
      */
-    constexpr size_t size() const noexcept { return Size; }
+    [[nodiscard]] constexpr size_t size() const noexcept { return Size; }
 
     /**
      * Get length of string.
-     * @returns Number of characters in string.
+     * @return Number of characters in string.
      */
-    constexpr size_t length() const noexcept { return Size; }
+    [[nodiscard]] constexpr size_t length() const noexcept { return Size; }
 
     /**
      * Check if string is empty.
-     * @returns True if string is empty, False otherwise.
+     * @return True if string is empty, False otherwise.
      */
-    constexpr bool empty() const noexcept { return dataArray.empty(); }
+    [[nodiscard]] constexpr bool empty() const noexcept { return dataArray.empty(); }
 
     /**
      * Get maximum number of elements that can fit in string.
-     * @returns String maximum size.
+     * @return String maximum size.
      */
     constexpr size_t max_size() noexcept { return Size; }
 
     /**
      * Get specified character from string with bounds checking.
      * @param i Zero-index position of character to get.
-     * @returns Requested element (throws if position is out of bounds).
+     * @return Requested element (throws if position is out of bounds).
      */
     constexpr char &at(size_t i) { return dataArray.at(i); }
 
-    constexpr char const &at(size_t i) const { return dataArray.at(i); }
+    [[nodiscard]] constexpr char const &at(size_t i) const { return dataArray.at(i); }
 
     /**
      * Get specified character from string.
      * @param i Zero-index position of character to get.
-     * @returns Requested element.
+     * @return Requested element.
      */
     constexpr char &operator[](size_t i) noexcept { return dataArray[i]; }
 
@@ -208,25 +208,25 @@ public:
 
     /**
      * Get element at start of string.
-     * @returns First valid character in string.
+     * @return First valid character in string.
      */
     constexpr char &front() noexcept { return dataArray.front(); }
 
-    constexpr char const &front() const noexcept { return dataArray.front(); }
+    [[nodiscard]] constexpr char const &front() const noexcept { return dataArray.front(); }
 
     /**
      * Get element at back of string.
-     * @returns Last valid character in string.
+     * @return Last valid character in string.
      */
     constexpr char &back() noexcept { return dataArray[Size - 1]; }
 
-    constexpr char const &back() const noexcept { return dataArray[Size - 1]; }
+    [[nodiscard]] constexpr char const &back() const noexcept { return dataArray[Size - 1]; }
 
     /**
      * Convert string to lower case.
-     * @returns New string containing copy of original but with all characters converted to lower case.
+     * @return New string containing copy of original but with all characters converted to lower case.
      */
-    constexpr StaticString lower() const noexcept
+    [[nodiscard]] constexpr StaticString lower() const noexcept
     {
         StaticString str(*this);
         std::transform(str.begin(), str.end() - 1, str.begin(),
@@ -236,9 +236,9 @@ public:
 
     /**
      * Convert string to upper case.
-     * @returns New string containing copy of original but with all characters converted to upper case.
+     * @return New string containing copy of original but with all characters converted to upper case.
      */
-    constexpr StaticString upper() const noexcept
+    [[nodiscard]] constexpr StaticString upper() const noexcept
     {
         StaticString str(*this);
         std::transform(str.begin(), str.end() - 1, str.begin(),
@@ -250,11 +250,14 @@ public:
      * Search the string for a specified character.
      * @param ch The character to search for.
      * @param start (Optional) The position in the string to start searching at.
-     * @returns The position of the found character (0-indexed) or 'npos' if not found.
+     * @return The position of the found character (0-indexed) or 'npos' if not found.
      */
-    constexpr size_t find(char ch, const size_t start = 0) const noexcept
+    [[nodiscard]] constexpr size_t find(char ch, size_t const start = 0) const noexcept
     {
-        if (start > Size - 1) return npos;
+        if (start > Size - 1)
+        {
+            return npos;
+        }
         for (size_t i = start; i < Size; ++i)
         {
             if (dataArray[i] == ch)
@@ -270,12 +273,15 @@ public:
      * @tparam Size2 Size of search string (must be less than current string)
      * @param subString String to search for.
      * @param start (Optional) The position in the string to start searching at.
-     * @returns The position of the first found string (0-indexed) or 'npos' if not found.
+     * @return The position of the first found string (0-indexed) or 'npos' if not found.
      */
     template<size_t Size2>
-    constexpr size_t find(StaticString<Size2> const &subString, const size_t start = 0) const noexcept
+    constexpr size_t find(StaticString<Size2> const &subString, size_t const start = 0) const noexcept
     {
-        if (Size < Size2 || start > Size - Size2) return npos;
+        if (Size < Size2 || start > Size - Size2)
+        {
+            return npos;
+        }
         for (size_t i = start; i < Size; ++i)
         {
             for (size_t j = 0; j < Size2; ++j)
@@ -295,10 +301,10 @@ public:
      * @tparam Size2 Size of search string (must be less than current string)
      * @param subString String to search for.
      * @param start (Optional) The position in the string to start searching at.
-     * @returns The position of the first found string (0-indexed) or 'npos' if not found.
+     * @return The position of the first found string (0-indexed) or 'npos' if not found.
      */
     template<size_t Size2>
-    constexpr size_t find(char const (&subString)[Size2], const size_t start = 0) const noexcept
+    constexpr size_t find(char const (&subString)[Size2], size_t const start = 0) const noexcept
     {
         return find(StaticString<Size2 - 1>(subString), start);
     }
@@ -307,12 +313,15 @@ public:
      * Searches backwards through an string to find the last occurrence of a character.
      * @param ch    The character to search for.
      * @param start (Optional) The position to start searching from.
-     * @returns The position in the first string that the character is found at (npos if not found).
+     * @return The position in the first string that the character is found at (npos if not found).
      */
-    constexpr size_t rfind(char ch, size_t start = Size - 1) const noexcept
+    [[nodiscard]] constexpr size_t rfind(char ch, size_t const start = Size - 1) const noexcept
     {
-        if (start > Size - 1) return npos;
-        for (size_t i = start; ; --i)
+        if (start > Size - 1)
+        {
+            return npos;
+        }
+        for (size_t i = start;; --i)
         {
             if (dataArray[i] == ch)
             {
@@ -331,14 +340,17 @@ public:
      * @tparam Size2 Size of the second string.
      * @param subString The string to search for.
      * @param start     (Optional) The position to start searching from.
-     * @returns The position in the first string that the second is found at (npos if not found).
+     * @return The position in the first string that the second is found at (npos if not found).
      */
     template<size_t Size2>
-    constexpr size_t rfind(
-        StaticString<Size2> const &subString, const size_t start = Size - Size2) const noexcept
+    [[nodiscard]] constexpr size_t rfind(
+        StaticString<Size2> const &subString, size_t const start = Size - Size2) const noexcept
     {
-        if (Size < Size2 || start > Size - Size2) return npos;
-        for (size_t i = start; ; --i)
+        if (Size < Size2 || start > Size - Size2)
+        {
+            return npos;
+        }
+        for (size_t i = start;; --i)
         {
             for (size_t j = 0; j < Size2; ++j)
             {
@@ -364,10 +376,10 @@ public:
      * @tparam Size2 Size of the second string.
      * @param subString The array of elements to search for.
      * @param start     (Optional) The position to start searching from.
-     * @returns The position in the first string that the second is found at (npos if not found).
+     * @return The position in the first string that the second is found at (npos if not found).
      */
     template<size_t Size2>
-    constexpr size_t rfind(char const (&subString)[Size2], const size_t start = Size - Size2) const noexcept
+    constexpr size_t rfind(char const (&subString)[Size2], size_t const start = Size - Size2) const noexcept
     {
         return rfind(StaticString<Size2 - 1>(subString), start);
     }
@@ -375,15 +387,15 @@ public:
     /**
      * Check if string contains specified character.
      * @param ch Character to search for.
-     * @returns True if character found, False otherwise.
+     * @return True if character found, False otherwise.
      */
-    constexpr bool contains(char ch) const noexcept { return find(ch) != npos; }
+    [[nodiscard]] constexpr bool contains(char const ch) const noexcept { return find(ch) != npos; }
 
     /**
      * Check if string contains another.
      * @tparam Size2 Size of the second string.
      * @param subString The string to search for.
-     * @returns True if character found, False otherwise.
+     * @return True if character found, False otherwise.
      */
     template<size_t Size2>
     constexpr bool contains(StaticString<Size2> const &subString) const noexcept
@@ -395,7 +407,7 @@ public:
      * Check if string contains another.
      * @tparam Size2 Size of the second string.
      * @param subString The array of elements to search for.
-     * @returns True if character found, False otherwise.
+     * @return True if character found, False otherwise.
      */
     template<size_t Size2>
     constexpr bool contains(char const (&subString)[Size2]) const noexcept
@@ -408,7 +420,7 @@ public:
      * @tparam Size2 Size of the second string.
      * @param other  First string.
      * @param other2 Second string to add to first.
-     * @returns New string containing the combined input strings.
+     * @return New string containing the combined input strings.
      */
     template<size_t Size2>
     friend constexpr StaticString<Size + Size2> operator+(
@@ -438,7 +450,7 @@ public:
      * @tparam Size2 Size of the second string.
      * @param other  The first string as an character array.
      * @param other2 Second string to add to first.
-     * @returns New string containing the combined input strings.
+     * @return New string containing the combined input strings.
      */
     template<size_t Size2>
     friend constexpr StaticString<Size + Size2 - 1> operator+(
@@ -452,7 +464,7 @@ public:
      * @tparam Size2 Size of the second string.
      * @param other  The first string.
      * @param other2 Second string (as an character array) to add to first.
-     * @returns New string containing the combined input strings.
+     * @return New string containing the combined input strings.
      */
     template<size_t Size2>
     friend constexpr StaticString<Size + Size2 - 1> operator+(
@@ -465,52 +477,53 @@ public:
      * Add a string to a character.
      * @param other  The starting character.
      * @param other2 Second string to add to first.
-     * @returns New string containing the combined input strings.
+     * @return New string containing the combined input strings.
      */
-    friend constexpr StaticString<Size + 1> operator+(char add, StaticString const &other) noexcept
+    friend constexpr StaticString<Size + 1> operator+(char const add, StaticString const &other) noexcept
     {
         StaticString<Size + 1> buffer;
         char                  *dest = buffer.data();
         // Copy data from character
         *dest++ = add;
         // Copy data from array to buffer
-        auto        len    = Size;
+        auto        len    = Size + 1; //+1 for '\0'
         char const *source = other.data();
-        while (len--)
+        while (--len != 0U)
         {
             *dest++ = *source++;
         }
-        // Copy data from character
-        *dest++ = add;
-        *dest++ = '\0';
+        *dest = *source;
+        return buffer;
     }
 
     /**
      * Add a character to a string.
      * @param other  The first string.
      * @param other2 The character to add.
-     * @returns New string containing the combined input strings.
+     * @return New string containing the combined input strings.
      */
-    friend constexpr StaticString<Size + 1> operator+(StaticString const &other, char add) noexcept
+    friend constexpr StaticString<Size + 1> operator+(StaticString const &other, char const add) noexcept
     {
         StaticString<Size + 1> buffer;
         // Copy data from first array to buffer
-        char       *dest   = buffer.dataArray.data();
+        char       *dest   = buffer.data();
         auto        len    = Size;
-        char const *source = other.dataArray.data();
-        while (len--)
+        char const *source = other.data();
+        while ((len--) != 0U)
         {
             *dest++ = *source++;
         }
         // Copy data from character
         *dest++ = add;
+        *dest   = '\0';
+        return buffer;
     }
 };
 
 /**
  * Convert a constant char array to a StaticString.
  * @tparam Size Number of elements in char array.
- * @returns New static string.
+ * @return New static string.
  */
 template<size_t Size>
 consteval StaticString<Size - 1> toStaticString(char const (&other)[Size]) noexcept
@@ -521,10 +534,10 @@ consteval StaticString<Size - 1> toStaticString(char const (&other)[Size]) noexc
 /**
  * Gets the readable name for a specified type.
  * @tparam T Generic type parameter.
- * @returns The type name string.
+ * @return The type name string.
  */
 template<typename T>
-constexpr auto toStaticString() noexcept
+consteval auto toStaticString() noexcept
 {
     constexpr auto getFunctionName = []<typename T2>() noexcept {
 #if defined(__clang__) || defined(__GNUC__)

@@ -43,20 +43,20 @@ struct Light
 
     /**
      * Get the type of the current light.
-     * @returns LightType enum specifying type of light.
+     * @return LightType enum specifying type of light.
      */
     LightType get_light_type()
     {
         // All delta lights have a pack value of 0.0.xxx with the type of light in w
         // To avoid increasing the size of the struct we use this pack variable to distinguish if the light is
-        // a delta light or an area light There is the potential for an area light to have v3==0.0.xxx so the
+        // a delta light or an area light. There is the potential for an area light to have v3==0.0.xxx so the
         // light types are represented using bit patterns that cannot occur in float32/16 numbers
 #ifndef __cplusplus
         uint index = asuint(v3.w);
 #else
         uint index = *reinterpret_cast<uint *>(&v3.w);
 #endif
-        if (index < kLight_Point)
+        if (index < (uint)kLight_Point)
         {
             return kLight_Area;
         }
@@ -121,7 +121,7 @@ inline Light MakeAreaLight(float3 radiance, float3 vertex1, float3 vertex2, floa
  * @param uv1      1st vertex uv texture parameter.
  * @param uv2      2nd vertex uv texture parameter.
  * @param uv3      3rd vertex uv texture parameter.
- * @returns A light with the correctly set internal values.
+ * @return A light with the correctly set internal values.
  */
 inline Light MakeAreaLight(float3 radiance, float3 vertex1, float3 vertex2, float3 vertex3, uint texture,
     float2 uv1, float2 uv2, float2 uv3)
@@ -140,7 +140,7 @@ inline Light MakeAreaLight(float3 radiance, float3 vertex1, float3 vertex2, floa
  * @param intensity Colour and intensity of light.
  * @param position  Position of the light.
  * @param range     Maximum distance from the light where lighting has an effect.
- * @returns A light with the correctly set internal values.
+ * @return A light with the correctly set internal values.
  */
 inline Light MakePointLight(float3 intensity, float3 position, float range)
 {
@@ -159,13 +159,13 @@ inline Light MakePointLight(float3 intensity, float3 position, float range)
  * @param direction       The direction to the light along cones view axis.
  * @param outterConeAngle The maximum angle from the cones view axis to the outside of the cone.
  * @param innerConeAngle  The angle from the cones view axis to the inside of the cones penumbra region.
- * @returns A light with the correctly set internal values.
+ * @return A light with the correctly set internal values.
  */
 inline Light MakeSpotLight(float3 intensity, float3 position, float range, float3 direction,
     float outterConeAngle, float innerConeAngle)
 {
     float cosOutter         = -cosf(outterConeAngle);
-    float lightAngleScale   = 1.0f / std::max(0.001f, cosf(innerConeAngle) + cosOutter);
+    float lightAngleScale   = 1.0f / glm::max(0.001f, cosf(innerConeAngle) + cosOutter);
     float sinAngle          = sinf(outterConeAngle);
     float tanAngle          = tanf(outterConeAngle);
     float lightAngleOffset  = cosOutter * lightAngleScale;
@@ -206,7 +206,7 @@ inline Light MakeEnvironmentLight(uint width, uint height)
     Light light;
     uint  lod      = glm::findMSB(glm::max(width, height));
     light.radiance = float4(float3(glm::uintBitsToFloat(lod), 0.0f, 0.0f), glm::uintBitsToFloat(UINT_MAX));
-    light.v3 = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Environment)));
+    light.v3       = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Environment)));
     return light;
 }
 #endif
@@ -214,14 +214,15 @@ inline Light MakeEnvironmentLight(uint width, uint height)
 /**
  * Check if a light is a delta light.
  * @param light The light to be checked.
- * @returns True if a delta light.
+ * @return True if a delta light.
  */
 inline bool isDeltaLight(Light light)
 {
 #if defined(DISABLE_DELTA_LIGHTS)
     return false;
 #elif !defined(DISABLE_AREA_LIGHTS) && !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    return light.get_light_type() != kLight_Area && light.get_light_type() != kLight_Environment;
+    LightType type = light.get_light_type();
+    return type != kLight_Area && type != kLight_Environment;
 #elif !defined(DISABLE_AREA_LIGHTS)
     return light.get_light_type() != kLight_Area;
 #elif defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
@@ -235,12 +236,13 @@ inline bool isDeltaLight(Light light)
  * Check if a light has a known position.
  * @note Lights such as directional and environment do not have positions and only directions.
  * @param light The light to be checked.
- * @returns True if light has a position.
+ * @return True if light has a position.
  */
 inline bool hasLightPosition(Light light)
 {
 #if !defined(DISABLE_DELTA_LIGHTS) && !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    return light.get_light_type() != kLight_Direction && light.get_light_type() != kLight_Environment;
+    LightType type = light.get_light_type();
+    return type != kLight_Direction && type != kLight_Environment;
 #elif defined(DISABLE_DELTA_LIGHTS) && !defined(DISABLE_ENVIRONMENT_LIGHTS) && !defined(DISABLE_AREA_LIGHTS)
     return light.get_light_type() != kLight_Environment;
 #elif !defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)

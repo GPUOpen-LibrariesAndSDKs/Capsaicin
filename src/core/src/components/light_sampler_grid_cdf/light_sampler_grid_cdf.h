@@ -28,23 +28,24 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class LightSamplerGridCDF
+class LightSamplerGridCDF final
     : public LightSampler
-    , public ComponentFactory::Registrar<LightSamplerGridCDF>
-    , public LightSamplerFactory::Registrar<LightSamplerGridCDF>
+    , ComponentFactory::Registrar<LightSamplerGridCDF>
+    , LightSamplerFactory::Registrar<LightSamplerGridCDF>
 {
 public:
     static constexpr std::string_view Name = "LightSamplerGridCDF";
-
-    LightSamplerGridCDF(LightSamplerGridCDF const &) noexcept = delete;
-
-    LightSamplerGridCDF(LightSamplerGridCDF &&) noexcept = default;
 
     /** Constructor. */
     LightSamplerGridCDF() noexcept;
 
     /** Destructor. */
-    ~LightSamplerGridCDF() noexcept;
+    ~LightSamplerGridCDF() noexcept override;
+
+    LightSamplerGridCDF(LightSamplerGridCDF const &other)                = delete;
+    LightSamplerGridCDF(LightSamplerGridCDF &&other) noexcept            = delete;
+    LightSamplerGridCDF &operator=(LightSamplerGridCDF const &other)     = delete;
+    LightSamplerGridCDF &operator=(LightSamplerGridCDF &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -67,7 +68,7 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -75,7 +76,7 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -109,7 +110,7 @@ public:
      * @param capsaicin Current framework context.
      * @return True if an update occurred requiring internal updates to be performed.
      */
-    bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool needsRecompile(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the list of shader defines that should be passed to any kernel that uses this lightSampler.
@@ -117,7 +118,8 @@ public:
      * @param capsaicin Current framework context.
      * @return A vector with each required define.
      */
-    std::vector<std::string> getShaderDefines(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] std::vector<std::string> getShaderDefines(
+        CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Add the required program parameters to a shader based on current settings.
@@ -125,20 +127,21 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept override;
+    void addProgramParameters(
+        CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept override;
 
     /**
-     * Check if the scenes lighting data was changed this frame.
+     * Check if the light settings have changed (i.e. enabled/disabled lights).
      * @param capsaicin Current framework context.
-     * @returns True if light data has changed.
+     * @return True if light settings have changed.
      */
-    bool getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
+    [[nodiscard]] bool getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept override;
 
     /**
      * Get the name of the header file used in HLSL code to include necessary sampler functions.
      * @return String name of the HLSL header include.
      */
-    std::string_view getHeaderFile() const noexcept override;
+    [[nodiscard]] std::string_view getHeaderFile() const noexcept override;
 
 private:
     bool initKernels(CapsaicinInternal const &capsaicin) noexcept;
@@ -146,7 +149,7 @@ private:
     RenderOptions options;
     bool          recompileFlag =
         false; /**< Flag to indicate if option change requires a shader recompile this frame */
-    bool lightsUpdatedFlag = false; /**< Flag to indicate if option change effects light samples */
+    bool lightSettingsUpdatedFlag = false; /**< Flag to indicate if option change effects light samples */
 
     LightSamplingConfiguration config = {uint4 {0}, float3 {0}, float3 {0}, float3 {0}};
     GfxBuffer                  configBuffer; /**< Buffer used to hold LightSamplingConfiguration */

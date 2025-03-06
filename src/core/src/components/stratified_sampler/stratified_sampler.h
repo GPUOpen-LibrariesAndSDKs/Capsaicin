@@ -25,22 +25,23 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class StratifiedSampler
+class StratifiedSampler final
     : public Component
-    , public ComponentFactory::Registrar<StratifiedSampler>
+    , ComponentFactory::Registrar<StratifiedSampler>
 {
 public:
     static constexpr std::string_view Name = "StratifiedSampler";
-
-    StratifiedSampler(StratifiedSampler const &) noexcept = delete;
-
-    StratifiedSampler(StratifiedSampler &&) noexcept = default;
 
     /** Constructor. */
     StratifiedSampler() noexcept;
 
     /** Destructor. */
-    ~StratifiedSampler() noexcept;
+    ~StratifiedSampler() noexcept override;
+
+    StratifiedSampler(StratifiedSampler const &other)                = delete;
+    StratifiedSampler(StratifiedSampler &&other) noexcept            = delete;
+    StratifiedSampler &operator=(StratifiedSampler const &other)     = delete;
+    StratifiedSampler &operator=(StratifiedSampler &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -56,7 +57,7 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -85,11 +86,11 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
 private:
     RenderOptions options;
-    GfxBuffer seedBuffer;
-    GfxBuffer sobolBuffer;
+    GfxBuffer     seedBuffer;
+    GfxBuffer     sobolBuffer;
 };
 } // namespace Capsaicin

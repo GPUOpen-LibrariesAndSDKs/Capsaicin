@@ -73,6 +73,8 @@ bool LightSamplerGridCDF::init(CapsaicinInternal const &capsaicin) noexcept
     configBuffer = gfxCreateBuffer<LightSamplingConfiguration>(gfx_, 1);
     configBuffer.setName("Capsaicin_LightSamplerGridCDF_ConfigBuffer");
 
+    config = {uint4 {0}, float3 {0}, float3 {0}, float3 {0}};
+
     return !!boundsProgram;
 }
 
@@ -80,7 +82,7 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
 {
     // Update internal options
     auto const optionsNew   = convertOptions(capsaicin.getOptions());
-    auto       lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
 
     recompileFlag =
         optionsNew.light_grid_cdf_threshold != options.light_grid_cdf_threshold
@@ -90,11 +92,12 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
             && (optionsNew.light_grid_cdf_lights_per_cell == 0
                 || options.light_grid_cdf_lights_per_cell == 0))
         || lightBuilder->needsRecompile(capsaicin);
-    lightsUpdatedFlag =
+    lightSettingsUpdatedFlag =
         optionsNew.light_grid_cdf_octahedron_sampling != options.light_grid_cdf_octahedron_sampling
         || optionsNew.light_grid_cdf_lights_per_cell != options.light_grid_cdf_lights_per_cell
         || optionsNew.light_grid_cdf_num_cells != options.light_grid_cdf_num_cells
-        || optionsNew.light_grid_cdf_centroid_build != options.light_grid_cdf_centroid_build;
+        || optionsNew.light_grid_cdf_centroid_build != options.light_grid_cdf_centroid_build
+        || lightBuilder->getLightSettingsUpdated() || config.numCells.x == 0 /*i.e. uninitialised*/;
     options = optionsNew;
 
     if (recompileFlag)
@@ -105,18 +108,20 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
         initKernels(capsaicin);
     }
 
-    if (capsaicin.getMeshesUpdated() || capsaicin.getTransformsUpdated() || lightsUpdatedFlag
-        || lightBuilder->getLightsUpdated() || recompileFlag || capsaicin.getFrameIndex() == 0
-        || config.numCells.x == 0 /*i.e. uninitialised*/)
+    if (capsaicin.getMeshesUpdated() || capsaicin.getTransformsUpdated() || lightSettingsUpdatedFlag
+        || recompileFlag)
     {
+        // Sanity check input options
+        options.light_grid_cdf_num_cells = glm::max(options.light_grid_cdf_num_cells, 1U);
+
         // Update the light sampler using scene bounds
         auto [sceneMin, sceneMax] = capsaicin.getSceneBounds();
 
         // Ensure each cell is square
-        const float3 sceneExtent = sceneMax - sceneMin;
+        float3 const sceneExtent = sceneMax - sceneMin;
         float const  largestAxis = glm::max(sceneExtent.x, glm::max(sceneExtent.y, sceneExtent.z));
-        float const  cellScale   = largestAxis / options.light_grid_cdf_num_cells;
-        const float3 cellNum     = ceil(sceneExtent / cellScale);
+        float const  cellScale   = largestAxis / static_cast<float>(options.light_grid_cdf_num_cells);
+        float3 const cellNum     = ceil(sceneExtent / cellScale);
 
         // Clamp max number of lights to those actually available
         uint lightsPerCell =
@@ -126,7 +131,7 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
         lightsPerCell += 1; // There is 1 extra slot used for cell table header
 
         // Create updated configuration
-        config.numCells    = uint4((uint3)cellNum, lightsPerCell);
+        config.numCells    = uint4(static_cast<uint3>(cellNum), lightsPerCell);
         config.cellSize    = sceneExtent / cellNum;
         config.sceneMin    = sceneMin;
         config.sceneExtent = sceneExtent;
@@ -142,7 +147,7 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
     {
         lightDataLength *= 8;
     }
-    if (lightIndexBuffer.getCount() < lightDataLength && lightDataLength > 0)
+    if (lightIndexBuffer.getCount() < lightDataLength)
     {
         gfxDestroyBuffer(gfx_, lightIndexBuffer);
         gfxDestroyBuffer(gfx_, lightCDFBuffer);
@@ -152,26 +157,27 @@ void LightSamplerGridCDF::run(CapsaicinInternal &capsaicin) noexcept
         lightCDFBuffer = gfxCreateBuffer<uint>(gfx_, lightDataLength);
         lightCDFBuffer.setName("Capsaicin_LightSamplerGridCDF_CDFBuffer");
 
-        lightsUpdatedFlag = true;
+        lightSettingsUpdatedFlag = true;
     }
 
     // Create the light sampling structure
-    if (lightBuilder->getLightsUpdated() || lightsUpdatedFlag || recompileFlag)
+    if (lightSettingsUpdatedFlag || recompileFlag || lightBuilder->getLightsUpdated())
     {
-        RenderTechnique::TimedSection const timedSection(*this, "BuildLightSampler");
+        TimedSection const timedSection(*this, "BuildLightSampler");
 
         // Add program parameters
         addProgramParameters(capsaicin, boundsProgram);
 
         gfxProgramSetParameter(gfx_, boundsProgram, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
+        auto const &textures = capsaicin.getTextures();
         gfxProgramSetParameter(
-            gfx_, boundsProgram, "g_TextureMaps", capsaicin.getTextures(), capsaicin.getTextureCount());
+            gfx_, boundsProgram, "g_TextureMaps", textures.data(), static_cast<uint32_t>(textures.size()));
         gfxProgramSetParameter(gfx_, boundsProgram, "g_TextureSampler", capsaicin.getLinearSampler());
 
         gfxProgramSetParameter(gfx_, boundsProgram, "g_FrameIndex", capsaicin.getFrameIndex());
 
         // Get total number of grid cells
-        uint3 groups = (uint3)config.numCells;
+        auto groups = static_cast<uint3>(config.numCells);
         if (options.light_grid_cdf_octahedron_sampling)
         {
             groups.x *= 8;
@@ -206,22 +212,24 @@ void LightSamplerGridCDF::renderGUI(CapsaicinInternal &capsaicin) const noexcept
 {
     if (ImGui::CollapsingHeader("Light Sampler Settings", ImGuiTreeNodeFlags_None))
     {
-        auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+        auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
         ImGui::DragInt("Max Cells per Axis",
-            (int32_t *)&capsaicin.getOption<uint32_t>("light_grid_cdf_num_cells"), 1, 1, 128);
+            reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_grid_cdf_num_cells")), 1, 1,
+            128);
         bool autoLights    = capsaicin.getOption<uint32_t>("light_grid_cdf_lights_per_cell") == 0;
         auto currentLights = lightBuilder->getLightCount();
         if (autoLights)
         {
             ImGui::BeginDisabled();
-            ImGui::DragInt("Number Lights per Cell", (int32_t *)&currentLights, 1, 1, currentLights);
+            ImGui::DragInt("Number Lights per Cell", reinterpret_cast<int32_t *>(&currentLights), 1, 1,
+                static_cast<int32_t>(currentLights));
             ImGui::EndDisabled();
         }
         else
         {
             ImGui::DragInt("Number Lights per Cell",
-                (int32_t *)&capsaicin.getOption<uint32_t>("light_grid_cdf_lights_per_cell"), 1, 1,
-                currentLights);
+                reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_grid_cdf_lights_per_cell")),
+                1, 1, static_cast<int32_t>(currentLights));
         }
         ImGui::SameLine();
         if (ImGui::Checkbox("Auto", &autoLights))
@@ -244,31 +252,31 @@ bool LightSamplerGridCDF::needsRecompile([[maybe_unused]] CapsaicinInternal cons
 std::vector<std::string> LightSamplerGridCDF::getShaderDefines(
     CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto                     lightBuilder = capsaicin.getComponent<LightBuilder>();
-    std::vector<std::string> baseDefines(std::move(lightBuilder->getShaderDefines(capsaicin)));
+    auto const  lightBuilder = capsaicin.getComponent<LightBuilder>();
+    std::vector baseDefines(lightBuilder->getShaderDefines(capsaicin));
     if (options.light_grid_cdf_threshold)
     {
-        baseDefines.push_back("LIGHTSAMPLERCDF_USE_THRESHOLD");
+        baseDefines.emplace_back("LIGHTSAMPLERCDF_USE_THRESHOLD");
     }
     if (options.light_grid_cdf_octahedron_sampling)
     {
-        baseDefines.push_back("LIGHTSAMPLERCDF_USE_OCTAHEDRON_SAMPLING");
+        baseDefines.emplace_back("LIGHTSAMPLERCDF_USE_OCTAHEDRON_SAMPLING");
     }
     if (options.light_grid_cdf_centroid_build)
     {
-        baseDefines.push_back("LIGHT_SAMPLE_VOLUME_CENTROID");
+        baseDefines.emplace_back("LIGHT_SAMPLE_VOLUME_CENTROID");
     }
     if (options.light_grid_cdf_lights_per_cell == 0)
     {
-        baseDefines.push_back("LIGHTSAMPLERCDF_HAS_ALL_LIGHTS");
+        baseDefines.emplace_back("LIGHTSAMPLERCDF_HAS_ALL_LIGHTS");
     }
     return baseDefines;
 }
 
 void LightSamplerGridCDF::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
     lightBuilder->addProgramParameters(capsaicin, program);
 
     // Bind the light sampling shader parameters
@@ -277,24 +285,24 @@ void LightSamplerGridCDF::addProgramParameters(
     gfxProgramSetParameter(gfx_, program, "g_LightSampler_CellsCDF", lightCDFBuffer);
 }
 
-bool LightSamplerGridCDF::getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept
+bool LightSamplerGridCDF::getLightSettingsUpdated(
+    [[maybe_unused]] CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
-    return lightsUpdatedFlag || lightBuilder->getLightsUpdated();
+    return lightSettingsUpdatedFlag;
 }
 
 std::string_view LightSamplerGridCDF::getHeaderFile() const noexcept
 {
-    return std::string_view("\"../../components/light_sampler_grid_cdf/light_sampler_grid_cdf.hlsl\"");
+    return "\"../../components/light_sampler_grid_cdf/light_sampler_grid_cdf.hlsl\"";
 }
 
 bool LightSamplerGridCDF::initKernels(CapsaicinInternal const &capsaicin) noexcept
 {
-    boundsProgram = gfxCreateProgram(
-        gfx_, "components/light_sampler_grid_cdf/light_sampler_grid_cdf", capsaicin.getShaderPath());
-    auto                      baseDefines(std::move(getShaderDefines(capsaicin)));
+    boundsProgram = capsaicin.createProgram("components/light_sampler_grid_cdf/light_sampler_grid_cdf");
+    auto const                baseDefines(getShaderDefines(capsaicin));
     std::vector<char const *> defines;
-    for (auto &i : baseDefines)
+    defines.reserve(baseDefines.size());
+    for (auto const &i : baseDefines)
     {
         defines.push_back(i.c_str());
     }

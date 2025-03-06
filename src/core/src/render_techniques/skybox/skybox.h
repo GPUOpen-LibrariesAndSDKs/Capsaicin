@@ -25,17 +25,40 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class Skybox : public RenderTechnique
+class Skybox final : public RenderTechnique
 {
 public:
     Skybox();
-    ~Skybox();
+    ~Skybox() override;
+
+    Skybox(Skybox const &other)                = delete;
+    Skybox(Skybox &&other) noexcept            = delete;
+    Skybox &operator=(Skybox const &other)     = delete;
+    Skybox &operator=(Skybox &&other) noexcept = delete;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets configuration options for current technique.
+     * @return A list of all valid configuration options.
      */
-    AOVList getAOVs() const noexcept override;
+    RenderOptionList getRenderOptions() noexcept override;
+
+    struct RenderOptions
+    {
+        bool skybox_use_jittering = false; /**< Whether to use jittering on sky pixels */
+    };
+
+    /**
+     * Convert render options to internal options format.
+     * @param options Current render options.
+     * @return The options converted.
+     */
+    static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
+
+    /**
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
+     */
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -58,6 +81,8 @@ public:
     void terminate() noexcept override;
 
 protected:
+    RenderOptions options_;
+
     GfxProgram skybox_program_;
     GfxKernel  skybox_kernel_;
 };

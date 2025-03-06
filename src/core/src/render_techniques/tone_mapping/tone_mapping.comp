@@ -19,53 +19,74 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
-#include "../../math/color.hlsl"
+
+#include "math/color.hlsl"
 
 uint2 g_BufferDimensions;
-uint  g_FrameIndex;
-float g_Exposure;
 
-RWTexture2D<float4> g_InputBuffer;
+Texture2D<float4> g_InputBuffer;
 RWTexture2D<float4> g_OutputBuffer;
 
-#include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"
+uint g_FrameIndex;
+StructuredBuffer<float> g_Exposure;
 
-float3 EvalLogContrastFunc(in float3 color, in float epsilon, in float logMidpoint, in float contrast)
-{
-    float3 logColor = log2(color + epsilon);
-    float3 adjColor = logMidpoint + (logColor - logMidpoint) * contrast;
-
-    return max(exp2(adjColor) - epsilon, 0.0f);
-}
-
-float3 tonemapSimple(in float3 color)
-{
-    float peak = max(color.x, max(color.y, color.z));
-    float3 ratio = (color / peak);
-    color = saturate(color / (color + 1.0f));
-    float blend_amount = luminance(color);
-    return lerp((peak / (peak + 1.0f)) * ratio, color, blend_amount);
-}
+#if defined(DITHER_8) || defined(DITHER_10)
+#include "components/blue_noise_sampler/blue_noise_sampler.hlsl"
 
 float3 ditherColor(in uint2 pixel, in float3 color)
 {
-    float v = BlueNoise_Sample1D(pixel, g_FrameIndex);
+    BlueNoiseSampler blue_noise_sampler = MakeBlueNoiseSampler(pixel, g_FrameIndex);
+    float v = blue_noise_sampler.rand();
     float o = 2.0f * v - 1.0f; // to (-1, 1) range
     v = max(o / sqrt(abs(o)), -1.0f);
+#   ifdef DITHER_8
     return color + v / 255.0f;
+#   else // DITHER_10
+    return color + v / 1024.0f;
+#   endif
 }
+#endif // DITHER_8 || DITHER_10
 
 [numthreads(8, 8, 1)]
-void Tonemap(in uint2 did : SV_DispatchThreadID)
+void Tonemap(uint2 did : SV_DispatchThreadID)
 {
-    float3 color = g_InputBuffer[did].xyz;
-    float2 uv = (did + 0.5f) / g_BufferDimensions;
+    if (any(did >= g_BufferDimensions))
+    {
+        return;
+    }
 
-    color *= exp2(g_Exposure);
-    color = saturate(tonemapSimple(color));
-    color = EvalLogContrastFunc(1.2f * color, 1e-5f, 0.18f, 1.2f);
+    float3 color = g_InputBuffer[did].xyz;
+
+    // Apply exposure
+    color = g_Exposure[0] * color;
+
+    // Apply tone mapping operator
+#   if defined(TONEMAP_AGX)
+    color = tonemapAgx(color);
+#   elif defined(TONEMAP_AGXFitted)
+    color = tonemapAgxFitted(color);
+#   elif defined(TONEMAP_UNCHARTED2)
+    color = tonemapUncharted2(color);
+#   elif defined(TONEMAP_PBRNEUTRAL)
+    color = tonemapPBRNeutral(color);
+#   elif defined(TONEMAP_ACES)
+    color = tonemapACES(color);
+#   elif defined(TONEMAP_ACESFITTED)
+    color = tonemapACESFitted(color);
+#   elif defined(TONEMAP_ACESFAST)
+    color = tonemapACESFast(color);
+#   elif defined(TONEMAP_REINHARDL)
+    color = tonemapReinhardLuminance(color);
+#   elif defined(TONEMAP_REINHARD)
+    color = tonemapSimpleReinhard(color);
+#   endif
+
     color = convertToSRGB(color);
+
+#if defined(DITHER_8) || defined(DITHER_10)
+    // Apply dithering to output
     color = ditherColor(did, color);
+#endif
 
     g_OutputBuffer[did] = float4(color, 1.0f);
 }

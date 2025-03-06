@@ -25,28 +25,35 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class ToneMapping : public RenderTechnique
+class ToneMapping final : public RenderTechnique
 {
 public:
     ToneMapping();
-    ~ToneMapping();
+    ~ToneMapping() override;
+
+    ToneMapping(ToneMapping const &other)                = delete;
+    ToneMapping(ToneMapping &&other) noexcept            = delete;
+    ToneMapping &operator=(ToneMapping const &other)     = delete;
+    ToneMapping &operator=(ToneMapping &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
      * @return A list of all valid configuration options.
      */
-    RenderOptionList getRenderOptions() noexcept override;
+    [[nodiscard]] RenderOptionList getRenderOptions() noexcept override;
 
     struct RenderOptions
     {
-        bool  tonemap_enable   = true;
-        float tonemap_exposure = 1.0f;
+        bool     tonemap_enable = true;
+        uint32_t tonemap_operator =
+            5; /**< Operator to use (0=None, 1=ReinhardSimple, 2=ReinhardLuminance,
+                  3=ACESFast, 4=ACESFitted, 5=ACES, 6=PBRNeutral, 7=Uncharted2, 8=AgxFitted, 9=Agx) */
     };
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -54,13 +61,25 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets a list of any shared buffers used by the current render technique.
+     * @return A list of all supported buffers.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedBufferList getSharedBuffers() const noexcept override;
+
+    /**
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
+     */
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
+
+    /**
+     * Gets a list of any debug views provided by the current render technique.
+     * @return A list of all supported debug views.
+     */
+    [[nodiscard]] DebugViewList getDebugViews() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -69,7 +88,7 @@ public:
      * @param capsaicin Current framework context.
      * @return True if initialisation succeeded, False otherwise.
      */
-    bool init(CapsaicinInternal const &capsaicin) noexcept override;
+    [[nodiscard]] bool init(CapsaicinInternal const &capsaicin) noexcept override;
 
     /**
      * Perform render operations.
@@ -89,9 +108,15 @@ public:
     void renderGUI(CapsaicinInternal &capsaicin) const noexcept override;
 
 private:
+    [[nodiscard]] bool initToneMapKernel() noexcept;
+
     RenderOptions options;
 
-    GfxKernel  tone_mapping_kernel_;
-    GfxProgram tone_mapping_program_;
+    DXGI_COLOR_SPACE_TYPE colourSpace =
+        DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709; /**< Current working space of the display */
+    bool usingDither = false; /**< Whether dithering is being used based on display format */
+
+    GfxProgram toneMappingProgram;
+    GfxKernel  toneMapKernel;
 };
 } // namespace Capsaicin

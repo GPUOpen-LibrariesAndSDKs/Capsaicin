@@ -24,14 +24,13 @@ THE SOFTWARE.
 #include "static_string.h"
 
 #include <memory>
-#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 
 namespace Capsaicin
 {
 /**
- * A object factory class.
+ * An object factory class.
  * Used to create self-registering types that can be dynamically retrieved using the factory @make function.
  * @tparam Base Type of the base parent class.
  * @example
@@ -66,7 +65,6 @@ public:
     /**
      * Makes a new instance of a requested type.
      * @param name The name of the type of create.
-     * @param args The optional arguments to pass to the types constructor.
      * @return A pointer to the newly created type (nullptr if type does not exist).
      */
     static std::unique_ptr<Base> make(std::string_view const &name) noexcept
@@ -136,6 +134,8 @@ public:
         static bool registered; /**< Internal boolean used to force @registerType to be called */
 
         Registrar() noexcept { (void)registered; }
+
+        virtual ~Registrar() noexcept = default;
     };
 };
 

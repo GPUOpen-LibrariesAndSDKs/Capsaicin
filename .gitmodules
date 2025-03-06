@@ -1,9 +1,3 @@
 [submodule "third_party/gfx"]
 	path = third_party/gfx
 	url = https://github.com/gboisse/gfx.git
-[submodule "third_party/CLI11"]
-	path = third_party/CLI11
-	url = https://github.com/CLIUtils/CLI11
-[submodule "assets/CapsaicinTestMedia"]
-	path = assets/CapsaicinTestMedia
-	url = https://github.com/GPUOpen-LibrariesAndSDKs/CapsaicinTestMedia.git

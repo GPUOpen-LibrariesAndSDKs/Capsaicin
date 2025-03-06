@@ -29,7 +29,7 @@ THE SOFTWARE.
  * Clamps a value between (0, 1].
  * @note This prevents values form being clamped to exactly zero but instead to near zero.
  * @param value Value to clamp.
- * @returns The clamped value.
+ * @return The clamped value.
  */
 float clampRange(float value)
 {
@@ -44,7 +44,7 @@ float3 clampRange(float3 value)
  * Clamps a value to be greater than epsilon.
  * @note This prevents values form being clamped to exactly zero but instead to near zero.
  * @param value Value to clamp.
- * @returns The clamped value.
+ * @return The clamped value.
  */
 float clampMax(float value)
 {
@@ -58,9 +58,13 @@ float3 clampMax(float3 value)
 /**
  * Raises a value to the power of 2 i.e. squared.
  * @param value Value to square.
- * @returns The squared value.
+ * @return The squared value.
  */
 float squared(const float value)
+{
+    return value * value;
+}
+float2 squared(const float2 value)
 {
     return value * value;
 }
@@ -72,8 +76,12 @@ float3 squared(const float3 value)
 /**
  * Get the squared length of a vector.
  * @param value Value to get squared length from.
- * @returns The squared value.
+ * @return The squared value.
  */
+float lengthSqr(const float2 value)
+{
+    return dot(value, value);
+}
 float lengthSqr(const float3 value)
 {
     return dot(value, value);
@@ -93,7 +101,7 @@ float2 uvToNdc(const float2 uv)
  * Get the squared distance between 2 points.
  * @param a The first point.
  * @param b The second point.
- * @returns The squared distance.
+ * @return The squared distance.
  */
 float distanceSqr(float3 a, float3 b)
 {
@@ -104,7 +112,7 @@ float distanceSqr(float3 a, float3 b)
 /**
  * Get the largest value of all elements in a vector.
  * @param val The input vector.
- * @returns The largest value.
+ * @return The largest value.
  */
 float hmax(float2 val)
 {
@@ -118,11 +126,23 @@ float hmax(float4 val)
 {
     return max(max(val.x, val.z), max(val.y, val.w));
 }
+float hmax(uint2 val)
+{
+    return max(val.x, val.y);
+}
+float hmax(uint3 val)
+{
+    return max(val.x, max(val.y, val.z));
+}
+float hmax(uint4 val)
+{
+    return max(max(val.x, val.z), max(val.y, val.w));
+}
 
 /**
  * Get the smallest value of all elements in a vector.
  * @param val The input vector.
- * @returns The smallest value.
+ * @return The smallest value.
  */
 float hmin(float2 val)
 {
@@ -136,11 +156,23 @@ float hmin(float4 val)
 {
     return min(min(val.x, val.z), min(val.y, val.w));
 }
+float hmin(uint2 val)
+{
+    return min(val.x, val.y);
+}
+float hmin(uint3 val)
+{
+    return min(val.x, min(val.y, val.z));
+}
+float hmin(uint4 val)
+{
+    return min(min(val.x, val.z), min(val.y, val.w));
+}
 
 /**
  * Sum all elements of a vector.
  * @param val The input vector.
- * @returns The combined value.
+ * @return The combined value.
  */
 float hadd(float2 val)
 {
@@ -151,6 +183,18 @@ float hadd(float3 val)
     return val.x + val.y + val.z;
 }
 float hadd(float4 val)
+{
+    return val.x + val.y + val.z + val.w;
+}
+float hadd(uint2 val)
+{
+    return val.x + val.y;
+}
+float hadd(uint3 val)
+{
+    return val.x + val.y + val.z;
+}
+float hadd(uint4 val)
 {
     return val.x + val.y + val.z + val.w;
 }
@@ -261,5 +305,27 @@ bool4 or(bool4 a, bool4 b)
     return a || b;
 }
 #endif
+
+/**
+ * Remove any NaNs and set them to 0.
+ * @param input The input value to remove NaNs from.
+ * @return The result with NaNs set to zero.
+ */
+float removeNaN(float input)
+{
+    return isnan(input) ? 0.0f : input;
+}
+float2 removeNaN(float2 input)
+{
+    return select(isnan(input), 0.0f, input);
+}
+float3 removeNaN(float3 input)
+{
+    return select(isnan(input), 0.0f, input);
+}
+float4 removeNaN(float4 input)
+{
+    return select(isnan(input), 0.0f, input);
+}
 
 #endif // MATH_HLSL

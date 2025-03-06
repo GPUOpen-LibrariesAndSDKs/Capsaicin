@@ -22,14 +22,20 @@ THE SOFTWARE.
 #pragma once
 
 #include "render_technique.h"
+#include "utilities/gpu_mip.h"
 
 namespace Capsaicin
 {
-class VisibilityBuffer : public RenderTechnique
+class VisibilityBuffer final : public RenderTechnique
 {
 public:
     VisibilityBuffer();
-    ~VisibilityBuffer();
+    ~VisibilityBuffer() override;
+
+    VisibilityBuffer(VisibilityBuffer const &other)                = delete;
+    VisibilityBuffer(VisibilityBuffer &&other) noexcept            = delete;
+    VisibilityBuffer &operator=(VisibilityBuffer const &other)     = delete;
+    VisibilityBuffer &operator=(VisibilityBuffer &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -39,16 +45,19 @@ public:
 
     struct RenderOptions
     {
-        bool visibility_buffer_use_rt = false; /**< Use Ray Tracing instead of rasterisation */
+        bool visibility_buffer_disable_alpha_testing = false;
+        bool visibility_buffer_use_rt                = false; /**< Use Ray Tracing instead of rasterisation */
         bool visibility_buffer_use_rt_dxr10 =
             false; /**< Use dxr 1.0 ray-tracing pipelines instead of inline rt
                    (only effects if visibility_buffer_use_rt is enabled) */
+        bool visibility_buffer_enable_hzb =
+            false; /**< Use HzB based occlusion culling (does not affect RT mode) */
     };
 
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
@@ -56,19 +65,25 @@ public:
      * Gets a list of any shared components used by the current render technique.
      * @return A list of all supported components.
      */
-    ComponentList getComponents() const noexcept override;
+    [[nodiscard]] ComponentList getComponents() const noexcept override;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets a list of any shared buffers used by the current render technique.
+     * @return A list of all supported buffers.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedBufferList getSharedBuffers() const noexcept override;
+
+    /**
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
+     */
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Gets a list of any debug views provided by the current render technique.
      * @return A list of all supported debug views.
      */
-    DebugViewList getDebugViews() const noexcept override;
+    [[nodiscard]] DebugViewList getDebugViews() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -90,6 +105,12 @@ public:
      */
     void terminate() noexcept override;
 
+    /**
+     * Render GUI options.
+     * @param [in,out] capsaicin The current capsaicin context.
+     */
+    void renderGUI(CapsaicinInternal &capsaicin) const noexcept override;
+
 private:
     /**
      * Initialise internal visibility buffer kernel.
@@ -98,18 +119,22 @@ private:
      */
     bool initKernel(CapsaicinInternal const &capsaicin) noexcept;
 
-    RenderOptions options;
-    GfxKernel     disocclusion_mask_kernel_;
-    GfxProgram    disocclusion_mask_program_;
-    GfxKernel     visibility_buffer_kernel_;
-    GfxProgram    visibility_buffer_program_;
-    GfxSbt        visibility_buffer_sbt_;
-    GfxProgram    debug_velocities_program_;
-    GfxKernel     debug_velocities_kernel_;
-    GfxProgram    debug_material_program_;
-    GfxKernel     debug_material_kernel_;
-    GfxProgram    debug_dxr10_program_;
-    GfxKernel     debug_dxr10_kernel_;
-    GfxSbt        debug_dxr10_sbt_;
+    RenderOptions    options;
+    GfxKernel        disocclusion_mask_kernel_;
+    GfxProgram       disocclusion_mask_program_;
+    GfxKernel        visibility_buffer_kernel_;
+    GfxProgram       visibility_buffer_program_;
+    GfxSbt           visibility_buffer_sbt_;
+    std::string_view debug_program_view;
+    GfxProgram       debug_program;
+    GfxKernel        debug_kernel;
+    GfxSbt           debug_sbt;
+    uint32_t         drawCount;
+    GfxBuffer        draw_data_buffer;
+    GfxBuffer        constants_buffer;
+    GfxBuffer        meshlet_visibility_buffer;
+    GfxTexture       depth_pyramid;
+    GfxSamplerState  depth_pyramid_sampler;
+    GPUMip           depth_pyramid_mip;
 };
 } // namespace Capsaicin

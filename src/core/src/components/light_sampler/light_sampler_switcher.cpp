@@ -46,7 +46,7 @@ RenderOptionList LightSamplerSwitcher::getRenderOptions() noexcept
     {
         for (auto &j : LightSamplerFactory::make(i)->getRenderOptions())
         {
-            if (std::find(newOptions.cbegin(), newOptions.cend(), j) == newOptions.cend())
+            if (std::ranges::find(std::as_const(newOptions), j) == newOptions.cend())
             {
                 // Add the new component to requested list
                 newOptions.emplace(std::move(j));
@@ -72,14 +72,68 @@ ComponentList LightSamplerSwitcher::getComponents() const noexcept
     {
         for (auto &j : LightSamplerFactory::make(i)->getComponents())
         {
-            if (std::find(components.cbegin(), components.cend(), j) == components.cend())
+            if (std::ranges::find(std::as_const(components), j) == components.cend())
             {
                 // Add the new component to requested list
-                components.emplace_back(std::move(j));
+                components.emplace_back(j);
             }
         }
     }
     return components;
+}
+
+SharedBufferList LightSamplerSwitcher::getSharedBuffers() const noexcept
+{
+    SharedBufferList buffers;
+    // Loop through all possible light samplers and get used buffers
+    for (auto &i : LightSamplerFactory::getNames())
+    {
+        for (auto &j : LightSamplerFactory::make(i)->getSharedBuffers())
+        {
+            if (std::ranges::find(std::as_const(buffers), j) == buffers.cend())
+            {
+                // Add the new component to requested list
+                buffers.emplace_back(j);
+            }
+        }
+    }
+    return buffers;
+}
+
+SharedTextureList LightSamplerSwitcher::getSharedTextures() const noexcept
+{
+    SharedTextureList textures;
+    // Loop through all possible light samplers and get used textures
+    for (auto &i : LightSamplerFactory::getNames())
+    {
+        for (auto &j : LightSamplerFactory::make(i)->getSharedTextures())
+        {
+            if (std::ranges::find(std::as_const(textures), j) == textures.cend())
+            {
+                // Add the new component to requested list
+                textures.emplace_back(j);
+            }
+        }
+    }
+    return textures;
+}
+
+DebugViewList LightSamplerSwitcher::getDebugViews() const noexcept
+{
+    DebugViewList views;
+    // Loop through all possible light samplers and get used debug views
+    for (auto &i : LightSamplerFactory::getNames())
+    {
+        for (auto &j : LightSamplerFactory::make(i)->getDebugViews())
+        {
+            if (std::ranges::find(std::as_const(views), j) == views.cend())
+            {
+                // Add the new component to requested list
+                views.emplace_back(j);
+            }
+        }
+    }
+    return views;
 }
 
 bool LightSamplerSwitcher::init(CapsaicinInternal const &capsaicin) noexcept
@@ -121,8 +175,8 @@ void LightSamplerSwitcher::renderGUI(CapsaicinInternal &capsaicin) const noexcep
 {
     // Select which renderer to use
     std::string samplerString;
-    auto        samplerList = LightSamplerFactory::getNames();
-    for (auto &i : samplerList)
+    auto const  samplerList = LightSamplerFactory::getNames();
+    for (auto const &i : samplerList)
     {
         samplerString += i;
         samplerString += '\0';
@@ -130,7 +184,7 @@ void LightSamplerSwitcher::renderGUI(CapsaicinInternal &capsaicin) const noexcep
     ImGui::Combo("Light Sampler",
         reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("light_sampler_type")),
         samplerString.c_str());
-    return currentSampler->renderGUI(capsaicin);
+    currentSampler->renderGUI(capsaicin);
 }
 
 bool LightSamplerSwitcher::needsRecompile(CapsaicinInternal const &capsaicin) const noexcept
@@ -149,14 +203,14 @@ std::vector<std::string> LightSamplerSwitcher::getShaderDefines(
 }
 
 void LightSamplerSwitcher::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     currentSampler->addProgramParameters(capsaicin, program);
 }
 
-bool LightSamplerSwitcher::getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept
+bool LightSamplerSwitcher::getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept
 {
-    return samplerChanged || currentSampler->getLightsUpdated(capsaicin);
+    return samplerChanged || currentSampler->getLightSettingsUpdated(capsaicin);
 }
 
 uint32_t LightSamplerSwitcher::getTimestampQueryCount() const noexcept

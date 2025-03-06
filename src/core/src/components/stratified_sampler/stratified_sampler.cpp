@@ -54,10 +54,10 @@ StratifiedSampler::RenderOptions StratifiedSampler::convertOptions(RenderOptionL
 
 bool StratifiedSampler::init(CapsaicinInternal const &capsaicin) noexcept
 {
-    uint64_t const seedBufferSize =
-        sizeof(uint32_t) * std::max(capsaicin.getWidth(), 1920u) * std::max(capsaicin.getHeight(), 1080u);
+    auto const     seedDimensions = max(capsaicin.getRenderDimensions(), uint2(1920, 1080));
+    uint64_t const seedBufferSize = sizeof(uint32_t) * seedDimensions.x * seedDimensions.y;
 
-    std::vector<uint32_t>                   seedBufferData;
+    std::vector<uint32_t> seedBufferData;
     seedBufferData.reserve(seedBufferSize);
     if (options.stratified_sampler_deterministic)
     {
@@ -69,19 +69,20 @@ bool StratifiedSampler::init(CapsaicinInternal const &capsaicin) noexcept
     }
     else
     {
-        std::random_device                      rd;
-        std::mt19937                            gen(rd());
+        std::random_device rd;
+        std::mt19937       gen(rd());
         for (uint32_t i = 0; i < seedBufferSize; i += 4)
         {
             seedBufferData.push_back(gen());
         }
     }
-    seedBuffer = gfxCreateBuffer<uint32_t>(gfx_, (uint32_t)seedBufferData.size(), seedBufferData.data());
+    seedBuffer =
+        gfxCreateBuffer<uint32_t>(gfx_, static_cast<uint32_t>(seedBufferData.size()), seedBufferData.data());
     seedBuffer.setName("StratifiedSampler_SeedBuffer");
 
     if (!sobolBuffer)
     {
-        sobolBuffer = gfxCreateBuffer<uint32_t>(gfx_, (uint32_t)sizeof(sobolData), sobolData);
+        sobolBuffer = gfxCreateBuffer<uint32_t>(gfx_, sizeof(sobolData), sobolData);
         sobolBuffer.setName("StratifiedSampler_SobolBuffer");
     }
     return true;
@@ -91,14 +92,14 @@ void StratifiedSampler::run(CapsaicinInternal &capsaicin) noexcept
 {
     // Check for option changed
     auto const optionsNew = convertOptions(capsaicin.getOptions());
-    bool update = optionsNew.stratified_sampler_deterministic != options.stratified_sampler_deterministic;
+    bool const update =
+        optionsNew.stratified_sampler_deterministic != options.stratified_sampler_deterministic;
     options = optionsNew;
 
     // Check if seed buffer needs to be re-initialised
-    uint64_t const seedBufferSize =
-        sizeof(uint32_t) * std::max(capsaicin.getWidth(), 1920u) * std::max(capsaicin.getHeight(), 1080u);
-
-    if (update || seedBufferSize > seedBuffer.getSize())
+    auto const seedDimensions = max(capsaicin.getRenderDimensions(), uint2(1920, 1080));
+    if (uint64_t const seedBufferSize = sizeof(uint32_t) * seedDimensions.x * seedDimensions.y;
+        update || seedBufferSize > seedBuffer.getSize())
     {
         GfxCommandEvent const command_event(gfx_, "InitStratifiedSampler");
 
@@ -117,7 +118,7 @@ void StratifiedSampler::terminate() noexcept
 }
 
 void StratifiedSampler::addProgramParameters(
-    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_SeedBuffer", seedBuffer);
     gfxProgramSetParameter(gfx_, program, "g_SobolXorsBuffer", sobolBuffer);

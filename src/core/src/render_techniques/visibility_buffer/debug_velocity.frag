@@ -25,7 +25,8 @@ Texture2D VelocityBuffer;
 float4 main(in float4 pos : SV_Position) : SV_Target
 {
     float2 velocity = VelocityBuffer.Load(int3(pos.xy, 0)).xy;
-    float3 velocity_vec = float3((velocity.y >= 0.0f ? velocity.y : 0.0f) + (velocity.y < 0.0f ? -velocity.y : 0.0f),
+    velocity = select(abs(velocity) <= 0.000001f, 0.0f, velocity); //Remove velocity due to jitter
+    float3 velocity_vec = float3(abs(velocity.y),
             (velocity.x < 0.0f ? -velocity.x : 0.0f) + (velocity.y < 0.0f ? -velocity.y : 0.0f),
             (velocity.x >= 0.0f ? velocity.x : 0.0f));
     return float4(pow(velocity_vec, 0.4f), 1.0f);

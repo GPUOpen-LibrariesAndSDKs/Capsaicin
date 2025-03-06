@@ -30,17 +30,17 @@ class Graph
 public:
     Graph() noexcept = default;
 
-    uint32_t getValueCount() const noexcept;
-    void     addValue(float value) noexcept;
-    float    getLastAddedValue() const noexcept;
-    float    getValueAtIndex(uint32_t index) const noexcept;
-    float    getAverageValue() const noexcept;
-    void     reset() noexcept;
+    [[nodiscard]] uint32_t getValueCount() const noexcept;
+    void                   addValue(double value) noexcept;
+    [[nodiscard]] double   getLastAddedValue() const noexcept;
+    [[nodiscard]] double   getValueAtIndex(uint32_t index) const noexcept;
+    [[nodiscard]] double   getAverageValue() const noexcept;
+    void                   reset() noexcept;
 
     static float GetValueAtIndex(void *object, int32_t index) noexcept;
 
 private:
-    uint32_t               current = 0;     /**< The current cursor into values circular buffer */
-    std::array<float, 256> values  = {0.0}; /**< The stored list of values */
+    uint32_t                current = 0;     /**< The current cursor into values circular buffer */
+    std::array<double, 256> values  = {0.0}; /**< The stored list of values */
 };
 } // namespace Capsaicin

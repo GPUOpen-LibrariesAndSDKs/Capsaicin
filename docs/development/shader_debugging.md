@@ -10,9 +10,9 @@ Simply add the `kGfxCreateContextFlag_EnableShaderDebugging` upon creating the `
 
 ```
 contextGFX = gfxCreateContext(
-	window, kGfxCreateContextFlag_EnableStablePowerState
+    window, kGfxCreateContextFlag_EnableStablePowerState
 #if _DEBUG
-	| kGfxCreateContextFlag_EnableDebugLayer | kGfxCreateContextFlag_EnableShaderDebugging
+    | kGfxCreateContextFlag_EnableDebugLayer | kGfxCreateContextFlag_EnableShaderDebugging
 #endif
     );
 ```

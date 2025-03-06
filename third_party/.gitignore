@@ -1,0 +1,5 @@
+gtest/
+cli11/
+nlohmann_json/
+yaml-cpp/
+meshoptimizer/

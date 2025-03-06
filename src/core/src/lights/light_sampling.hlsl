@@ -24,21 +24,22 @@ THE SOFTWARE.
 #define LIGHT_SAMPLING_HLSL
 
 #include "light_evaluation.hlsl"
-#include "../geometry/geometry.hlsl"
-#include "../math/math_constants.hlsl"
-#include "../math/sampling.hlsl"
+#include "geometry/geometry.hlsl"
+#include "math/math_constants.hlsl"
+#include "math/sampling.hlsl"
 
 /**
- * Sample the direction, PDF and position on a given area light.
- * @param light          The light to be sampled.
- * @param samples        Random number samples used to sample light.
- * @param position       The position on the surface currently being shaded
- * @param pdf            (Out) The PDF for the calculated sample (with respect to current light only).
- * @param lightPosition  (Out) The sampled position on the surface of the light.
- * @param barycentric    (Out) The sampled barycentric coordinates on the surface.
+ * Sample the direction, solid angle PDF and position on a given area light.
+ * @param light               The light to be sampled.
+ * @param samples             Random number samples used to sample light.
+ * @param position            The position on the surface currently being shaded.
+ * @param [out] pdf           The PDF for the calculated sample (with respect to current light only).
+ * @param [out] lightPosition The sampled position on the surface of the light.
+ * @param [out] barycentric   The sampled barycentric coordinates on the surface.
  * @return The direction to the sampled position on the light.
  */
-float3 sampleAreaLight(LightArea light, float2 samples, float3 position, out float pdf, out float3 lightPosition, out float2 barycentric)
+float3 sampleAreaLight(LightArea light, float2 samples, float3 position, out float pdf, out float3 lightPosition,
+    out float2 barycentric)
 {
     // Uniformly sample a triangle
     float sqrtU = sqrt(samples.x);
@@ -56,28 +57,60 @@ float3 sampleAreaLight(LightArea light, float2 samples, float3 position, out flo
     float3 lightNormal = lightCross / lightNormalLength.xxx;
     float lightArea = 0.5f * lightNormalLength;
 
-    // We support back face triangles so we must flip the normal as required
-    //  we cant use abs() later as we must have correct normal for offsetting position
-    float signedDist = dot(position - light.v0, lightNormal);
-    lightNormal *= sign(signedDist).xxx;
-    lightPosition = offsetPosition(lightPosition, lightNormal);
-
     // Determine light direction
     float3 lightVector = lightPosition - position;
     float3 lightDirection = normalize(lightVector);
 
     // Calculate PDF as solid angle measurement
     // The PDF is simply (1/area) converted to PDF of solid angle by dividing by (n.l/d^2)
-    pdf = saturate(dot(lightNormal, -lightDirection)) * lightArea;
-    pdf = (pdf != 0.0f) ? dot(lightVector, lightVector) / pdf : 0.0f;
+    // We support back face triangles so we use abs to handle back face cases
+    pdf = saturate(abs(dot(lightNormal, -lightDirection))) * lightArea;
+    pdf = (pdf != 0.0f) ? lengthSqr(lightVector) / pdf : 0.0f;
 
     return lightDirection;
 }
 
 /**
- * Calculate the PDF of sampling a given area light.
+ * Sample the direction, area PDF and position on a given area light.
+ * @param light               The light to be sampled.
+ * @param samples             Random number samples used to sample light.
+ * @param position            The position on the surface currently being shaded.
+ * @param [out] pdf           The PDF for the calculated sample (with respect to current light only).
+ * @param [out] lightPosition The sampled position on the surface of the light.
+ * @param [out] barycentric   The sampled barycentric coordinates on the surface.
+ * @return The direction to the sampled position on the light.
+ */
+float3 sampleAreaLightAM(LightArea light, float2 samples, float3 position, out float pdf, out float3 lightPosition,
+    out float2 barycentric)
+{
+    // Uniformly sample a triangle
+    float sqrtU = sqrt(samples.x);
+    barycentric = float2(1.0f - sqrtU, samples.y * sqrtU);
+
+    // Determine position on surface of light
+    lightPosition = interpolate(light.v0, light.v1, light.v2, barycentric);
+
+    // Calculate lights surface normal vector
+    float3 edge1 = light.v1 - light.v0;
+    float3 edge2 = light.v2 - light.v0;
+    float3 lightCross = cross(edge1, edge2);
+    // Calculate surface area of triangle
+    float lightNormalLength = length(lightCross);
+
+    // Determine light direction
+    float3 lightDirection = normalize(lightPosition - position);
+
+    // Calculate PDF as area measurement
+    // The PDF is simply (1/area)
+    pdf = 2.0F / lightNormalLength;
+
+    return lightDirection;
+}
+
+/**
+ * Calculate the solid angle PDF of sampling a given area light.
  * @param light           The light that was sampled.
- * @param shadingPosition The position on the surface currently being shaded
+ * @param shadingPosition The position on the surface currently being shaded.
  * @param lightPosition   The position on the surface of the light.
  * @return The calculated PDF with respect to the light.
  */
@@ -96,57 +129,55 @@ float sampleAreaLightPDF(LightArea light, float3 shadingPosition, float3 lightPo
     float3 lightVector = shadingPosition - lightPosition;
     float3 lightDirection = normalize(lightVector);
     float pdf = saturate(abs(dot(lightNormal, lightDirection))) * lightArea;
-    pdf = (pdf != 0.0f) ? dot(lightVector, lightVector) / pdf : 0.0f;
+    pdf = (pdf != 0.0f) ? lengthSqr(lightVector) / pdf : 0.0f;
+    return pdf;
+}
+
+/**
+ * Calculate the area PDF of sampling a given area light.
+ * @param light           The light that was sampled.
+ * @return The calculated PDF with respect to the light.
+ */
+float sampleAreaLightPDFAM(LightArea light)
+{
+    // Calculate lights surface normal vector
+    float3 edge1 = light.v1 - light.v0;
+    float3 edge2 = light.v2 - light.v0;
+    float3 lightCross = cross(edge1, edge2);
+    // Calculate surface area of triangle
+    float lightNormalLength = length(lightCross);
+
+    // Evaluate PDF for current position and direction
+    float pdf = 2.0F / lightNormalLength;
     return pdf;
 }
 
 /**
  * Sample the direction, PDF and position for a environment light.
- * @param light   The light to be sampled.
- * @param samples Random number samples used to sample light.
- * @param normal  Shading normal vector at current position.
- * @param pdf     (Out) The PDF for the calculated sample.
+ * @param light     The light to be sampled.
+ * @param samples   Random number samples used to sample light.
+ * @param normal    Shading normal vector at current position.
+ * @param [out] pdf The PDF for the calculated sample.
  * @return The direction to the sampled position on the light.
  */
 float3 sampleEnvironmentLight(LightEnvironment light, float2 samples, float3 normal, out float pdf)
 {
-    // Currently just uses a uniform spherical sample
+    // Currently just uses a cosine hemispherical sample
+#ifdef ENABLE_COSINE_ENVIRONMENT_SAMPLING
+    // Sample cosine sphere
+    float3 lightDirection = mapToCosineHemisphere(samples, normal);
 
+    // Set PDF
+    pdf = saturate(dot(normal, lightDirection)) * INV_PI;
+#else
     // Sample uniform sphere
-    float z = 1.0f - 2.0f * samples.x;
-    float r = sqrt(1.0f - (z * z));
-    float phi = 2.0f * PI * samples.y;
-    float3 direction = float3(r * cos(phi), r * sin(phi), z);
-
-    // Flip direction to ensure it is in the hemisphere oriented around the normal
-    direction = dot(direction, normal) < 0.0f ? -direction : direction;
+    float3 lightDirection = mapToHemisphere(samples, normal);
 
     // Set PDF
     pdf = INV_TWO_PI;
+#endif
 
-    return direction;
-}
-
-/**
- * Sample the direction, PDF and position for a environment light.
- * @param light   The light to be sampled.
- * @param samples Random number samples used to sample light.
- * @param normal  Shading normal vector at current position.
- * @param pdf     (Out) The PDF for the calculated sample.
- * @return The direction to the sampled position on the light.
- */
-float3 sampleEnvironmentLight(LightEnvironment light, float2 samples, out float pdf)
-{
-    // Sample uniform sphere
-    float z = 1.0f - 2.0f * samples.x;
-    float r = sqrt(1.0f - (z * z));
-    float phi = 2.0f * PI * samples.y;
-    float3 direction = float3(r * cos(phi), r * sin(phi), z);
-
-    // Set PDF
-    pdf = INV_FOUR_PI;
-
-    return direction;
+    return lightDirection;
 }
 
 /**
@@ -158,30 +189,21 @@ float3 sampleEnvironmentLight(LightEnvironment light, float2 samples, out float 
  */
 float sampleEnvironmentLightPDF(LightEnvironment light, float3 lightDirection, float3 normal)
 {
+#ifdef ENABLE_COSINE_ENVIRONMENT_SAMPLING
+    float pdf = saturate(dot(normal, lightDirection)) * INV_PI;
+#else
     // Currently just uniformly samples a hemisphere
     float pdf = INV_TWO_PI;
-    return pdf;
-}
-
-/**
- * Calculate the PDF of sampling an environment light.
- * @param light          The light to be sampled.
- * @param lightDirection The direction from the shadingPosition to the lightPosition.
- * @return The calculated PDF with respect to the light.
- */
-float sampleEnvironmentLightPDF(LightEnvironment light, float3 lightDirection)
-{
-    // Currently just uniformly samples a sphere when no normal is provided
-    float pdf = INV_FOUR_PI;
+#endif
     return pdf;
 }
 
 /**
  * Sample the direction, PDF and position for a spot light.
- * @param light         The light to be sampled.
- * @param position      The current surface position.
- * @param pdf           (Out) The PDF for the calculated sample.
- * @param lightPosition (Out) The sampled position on the surface of the light.
+ * @param light               The light to be sampled.
+ * @param position            The current surface position.
+ * @param [out] pdf           The PDF for the calculated sample.
+ * @param [out] lightPosition The sampled position on the surface of the light.
  * @return The direction to the sampled light.
  */
 float3 samplePointLight(LightPoint light, float3 position, out float pdf, out float3 lightPosition)
@@ -214,10 +236,10 @@ float samplePointLightPDF(LightPoint light, float3 position)
 
 /**
  * Sample the direction, PDF and position for a spot light.
- * @param light         The light to be sampled.
- * @param position      The current surface position.
- * @param pdf           (Out) The PDF for the calculated sample.
- * @param lightPosition (Out) The sampled position on the surface of the light.
+ * @param light               The light to be sampled.
+ * @param position            The current surface position.
+ * @param [out] pdf           The PDF for the calculated sample.
+ * @param [out] lightPosition The sampled position on the surface of the light.
  * @return The direction to the sampled light.
  */
 float3 sampleSpotLight(LightSpot light, float3 position, out float pdf, out float3 lightPosition)
@@ -262,8 +284,8 @@ float sampleSpotLightPDF(LightSpot light, float3 position)
 
 /**
  * Sample the direction and PDF for a directional light.
- * @param light The light to be sampled.
- * @param pdf   (Out) The PDF for the calculated sample.
+ * @param light     The light to be sampled.
+ * @param [out] pdf The PDF for the calculated sample.
  * @return The direction to the sampled light.
  */
 float3 sampleDirectionalLight(LightDirectional light, out float pdf)
@@ -285,96 +307,16 @@ float sampleDirectionalLightPDF(LightDirectional light)
 }
 
 /**
- * Calculate the PDF of sampling a given light.
- * @param selectedLight   The light that was sampled.
- * @param position        The position on the surface currently being shaded
- * @param normal          Shading normal vector at current position.
- * @param lightDirection  The sampled direction to the light.
- * @param lightPosition   The position on the surface of the light.
- * @return The calculated PDF with respect to the light.
- */
-float sampleLightPdf(Light selectedLight, float3 position, float3 normal, float3 lightDirection, float3 lightPosition)
-{
-#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
-    return 0.0f;
-#else
-    float solidAnglePdf;
-#   ifdef HAS_MULTIPLE_LIGHT_TYPES
-    LightType lightType = selectedLight.get_light_type();
-#   endif
-#   ifndef DISABLE_AREA_LIGHTS
-#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    if (lightType == kLight_Area)
-#       endif
-    {
-        // Get the area light
-        LightArea light = MakeLightArea(selectedLight);
-
-        solidAnglePdf = sampleAreaLightPDF(light, position, lightPosition);
-    }
-#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
-    else
-#       endif
-#   endif // DISABLE_AREA_LIGHTS
-#   ifndef DISABLE_DELTA_LIGHTS
-    if (lightType == kLight_Point)
-    {
-        // Get the point light
-        LightPoint light = MakeLightPoint(selectedLight);
-
-        solidAnglePdf = samplePointLightPDF(light, position);
-
-    }
-    else if (lightType == kLight_Spot)
-    {
-        // Get the spot light
-        LightSpot light = MakeLightSpot(selectedLight);
-
-        solidAnglePdf = sampleSpotLightPDF(light, position);
-    }
-    else
-#       ifndef DISABLE_ENVIRONMENT_LIGHTS
-    if (lightType == kLight_Direction)
-#       endif
-    {
-        // Get the directional light
-        LightDirectional light = MakeLightDirectional(selectedLight);
-
-        solidAnglePdf = sampleDirectionalLightPDF(light);
-    }
-#       ifndef DISABLE_ENVIRONMENT_LIGHTS
-    else
-#       endif
-#   endif // DISABLE_DELTA_LIGHTS
-#   ifndef DISABLE_ENVIRONMENT_LIGHTS
-    /*lightType == kLight_Environment*/
-    {
-        // Get the environment light
-        LightEnvironment light = MakeLightEnvironment(selectedLight);
-
-        solidAnglePdf = sampleEnvironmentLightPDF(light, lightDirection, normal);
-    }
-#   endif // DISABLE_ENVIRONMENT_LIGHTS
-    // Discard lights behind surface
-    if (dot(lightDirection, normal) < 0.0f)
-    {
-        solidAnglePdf = 0.0f;
-    }
-    return solidAnglePdf;
-#endif
-}
-
-/**
- * Sample the direction and PDF for a specified light.
+ * Sample the direction and solid angle PDF for a specified light.
  * @tparam RNG The type of random number sampler to be used.
- * @param selectedLight  The light to be sampled.
- * @param random         Random number sampler used to sample light.
- * @param position       Current position on surface.
- * @param normal         Shading normal vector at current position.
- * @param lightDirection (Out) The sampled direction to the light.
- * @param lightPDF       (Out) The PDF for the calculated sample.
- * @param lightPosition  (Out) The position of the light sample (only valid if sampled light has a position).
- * @param sampleParams   (Out) UV values that can be used to recalculate light parameters using @sampledLightUnpack.
+ * @param selectedLight        The light to be sampled.
+ * @param random               Random number sampler used to sample light.
+ * @param position             Current position on surface.
+ * @param normal               Shading normal vector at current position.
+ * @param [out] lightDirection The sampled direction to the light.
+ * @param [out] lightPDF       The PDF for the calculated sample.
+ * @param [out] lightPosition  The position of the light sample (only valid if sampled light has a position).
+ * @param [out] sampleParams   UV values that can be used to recalculate light parameters using @sampledLightUnpack.
  * @return The radiance returned from sampled light direction.
  */
 template<typename RNG>
@@ -459,8 +401,8 @@ float3 sampleLight(Light selectedLight, inout RNG random, float3 position, float
 
         radiance = evaluateEnvironmentLight(light, lightDirection);
 
-        // Pack light direction into storable UV
-        sampleParams = MapToSphereInverse(lightDirection);
+        // The randomValues are directly mapped to spherical values so can be directly passed through
+        sampleParams = randomValues;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
     // Discard lights behind surface
@@ -477,17 +419,17 @@ float3 sampleLight(Light selectedLight, inout RNG random, float3 position, float
 }
 
 /**
- * Sample the direction and PDF for a specified light within a ray cone.
+ * Sample the direction and solid angle PDF for a specified light within a ray cone.
  * @tparam RNG The type of random number sampler to be used.
- * @param selectedLight  The light to be sampled.
- * @param random         Random number sampler used to sample light.
- * @param position       Current position on surface.
- * @param normal         Shading normal vector at current position.
- * @param solidAngle     Solid angle around view direction of visible ray cone.
- * @param lightDirection (Out) The sampled direction to the light.
- * @param lightPDF       (Out) The PDF for the calculated sample.
- * @param lightPosition  (Out) The position of the light sample (only valid if sampled light has a position).
- * @param sampleParams   (Out) UV values that can be used to recalculate light parameters using @sampledLightUnpack.
+ * @param selectedLight        The light to be sampled.
+ * @param random               Random number sampler used to sample light.
+ * @param position             Current position on surface.
+ * @param normal               Shading normal vector at current position.
+ * @param solidAngle           Solid angle around view direction of visible ray cone.
+ * @param [out] lightDirection The sampled direction to the light.
+ * @param [out] lightPDF       The PDF for the calculated sample.
+ * @param [out] lightPosition  The position of the light sample (only valid if sampled light has a position).
+ * @param [out] sampleParams   UV values that can be used to recalculate light parameters using @sampledLightUnpack.
  * @return The radiance returned from sampled light direction.
  */
 template<typename RNG>
@@ -572,8 +514,8 @@ float3 sampleLightCone(Light selectedLight, inout RNG random, float3 position, f
 
         radiance = evaluateEnvironmentLightCone(light, lightDirection, solidAngle);
 
-        // Pack light direction into storable UV
-        sampleParams = MapToSphereInverse(lightDirection);
+        // The randomValues are directly mapped to spherical values so can be directly passed through
+        sampleParams = randomValues;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
     // Discard lights behind surface
@@ -590,20 +532,101 @@ float3 sampleLightCone(Light selectedLight, inout RNG random, float3 position, f
 }
 
 /**
- * Sample the direction and PDF for a specified light.
- * @note This differs from `sampleLight` in that it does not require knowing the surface normal.
+ * Calculate the solid angle PDF of sampling a given light.
+ * @param selectedLight   The light that was sampled.
+ * @param position        The position on the surface currently being shaded
+ * @param normal          Shading normal vector at current position.
+ * @param lightDirection  The sampled direction to the light.
+ * @param lightPosition   The position on the surface of the light.
+ * @return The calculated PDF with respect to the light.
+ */
+float sampleLightPDF(Light selectedLight, float3 position, float3 normal, float3 lightDirection, float3 lightPosition)
+{
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    return 0.0f;
+#else
+    float lightPdf;
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
+#   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
+    {
+        // Get the area light
+        LightArea light = MakeLightArea(selectedLight);
+
+        lightPdf = sampleAreaLightPDF(light, position, lightPosition);
+    }
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    else
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
+    {
+        // Get the point light
+        LightPoint light = MakeLightPoint(selectedLight);
+
+        lightPdf = samplePointLightPDF(light, position);
+
+    }
+    else if (lightType == kLight_Spot)
+    {
+        // Get the spot light
+        LightSpot light = MakeLightSpot(selectedLight);
+
+        lightPdf = sampleSpotLightPDF(light, position);
+    }
+    else
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
+    {
+        // Get the directional light
+        LightDirectional light = MakeLightDirectional(selectedLight);
+
+        lightPdf = sampleDirectionalLightPDF(light);
+    }
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    else
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
+    {
+        // Get the environment light
+        LightEnvironment light = MakeLightEnvironment(selectedLight);
+
+        lightPdf = sampleEnvironmentLightPDF(light, lightDirection, normal);
+    }
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
+    // Discard lights behind surface
+    if (dot(lightDirection, normal) < 0.0f)
+    {
+        lightPdf = 0.0f;
+    }
+    return lightPdf;
+#endif
+}
+
+
+/**
+ * Sample the direction and area PDF for a specified light.
  * @tparam RNG The type of random number sampler to be used.
- * @param selectedLight  The light to be sampled.
- * @param random         Random number sampler used to sample light.
- * @param position       Current position on surface.
- * @param lightDirection (Out) The sampled direction to the light.
- * @param lightPDF       (Out) The PDF for the calculated sample.
- * @param lightPosition  (Out) The position of the light sample (only valid if sampled light has a position).
- * @param sampleParams   (Out) UV values that can be used to recalculate light parameters using @sampledLightUnpack.
+ * @param selectedLight        The light to be sampled.
+ * @param random               Random number sampler used to sample light.
+ * @param position             Current position on surface.
+ * @param normal               Shading normal vector at current position.
+ * @param [out] lightDirection The sampled direction to the light.
+ * @param [out] lightPDF       The PDF for the calculated sample.
+ * @param [out] lightPosition  The position of the light sample (only valid if sampled light has a position).
+ * @param [out] sampleParams   UV values that can be used to recalculate light parameters using @sampledLightUnpack.
  * @return The radiance returned from sampled light direction.
  */
 template<typename RNG>
-float3 sampleLightUnorm(Light selectedLight, inout RNG random, float3 position, out float3 lightDirection, out float lightPDF, out float3 lightPosition, out float2 sampleParams)
+float3 sampleLightAM(Light selectedLight, inout RNG random, float3 position, float3 normal, out float3 lightDirection, out float lightPDF, out float3 lightPosition, out float2 sampleParams)
 {
 #if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
     lightDirection = 0.0f.xxx;
@@ -627,9 +650,9 @@ float3 sampleLightUnorm(Light selectedLight, inout RNG random, float3 position, 
         LightArea light = MakeLightArea(selectedLight);
 
         // Sample the selected area light
-        lightDirection = sampleAreaLight(light, randomValues, position, lightPDF, lightPosition, sampleParams);
+        lightDirection = sampleAreaLightAM(light, randomValues, position, lightPDF, lightPosition, sampleParams);
 
-        radiance = evaluateAreaLight(light, sampleParams);
+        radiance = evaluateAreaLightAM(light, sampleParams, position);
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
@@ -680,14 +703,19 @@ float3 sampleLightUnorm(Light selectedLight, inout RNG random, float3 position, 
         LightEnvironment light = MakeLightEnvironment(selectedLight);
 
         // Sample the environment map
-        lightDirection = sampleEnvironmentLight(light, randomValues, lightPDF);
+        lightDirection = sampleEnvironmentLight(light, randomValues, normal, lightPDF);
 
         radiance = evaluateEnvironmentLight(light, lightDirection);
 
-        // Pack light direction into storable UV
-        sampleParams = MapToSphereInverse(lightDirection);
+        // The randomValues are directly mapped to spherical values so can be directly passed through
+        sampleParams = randomValues;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
+    // Discard lights behind surface
+    if (dot(lightDirection, normal) < 0.0f)
+    {
+        lightPDF = 0.0f;
+    }
     if (lightPDF == 0.0f)
     {
         return 0.0f.xxx;
@@ -697,21 +725,21 @@ float3 sampleLightUnorm(Light selectedLight, inout RNG random, float3 position, 
 }
 
 /**
- * Sample the direction and PDF for a specified light.
- * @note This differs from `sampleLightCone` in that it does not require knowing the surface normal.
+ * Sample the direction and area PDF for a specified light within a ray cone.
  * @tparam RNG The type of random number sampler to be used.
- * @param selectedLight  The light to be sampled.
- * @param random         Random number sampler used to sample light.
- * @param position       Current position on surface.
- * @param solidAngle     Solid angle around view direction of visible ray cone.
- * @param lightDirection (Out) The sampled direction to the light.
- * @param lightPDF       (Out) The PDF for the calculated sample.
- * @param lightPosition  (Out) The position of the light sample (only valid if sampled light has a position).
- * @param sampleParams   (Out) UV values that can be used to recalculate light parameters using @sampledLightUnpack.
+ * @param selectedLight        The light to be sampled.
+ * @param random               Random number sampler used to sample light.
+ * @param position             Current position on surface.
+ * @param normal               Shading normal vector at current position.
+ * @param solidAngle           Solid angle around view direction of visible ray cone.
+ * @param [out] lightDirection The sampled direction to the light.
+ * @param [out] lightPDF       The PDF for the calculated sample.
+ * @param [out] lightPosition  The position of the light sample (only valid if sampled light has a position).
+ * @param [out] sampleParams   UV values that can be used to recalculate light parameters using @sampledLightUnpack.
  * @return The radiance returned from sampled light direction.
  */
 template<typename RNG>
-float3 sampleLightConeUnorm(Light selectedLight, inout RNG random, float3 position, float solidAngle, out float3 lightDirection, out float lightPDF, out float3 lightPosition, out float2 sampleParams)
+float3 sampleLightConeAM(Light selectedLight, inout RNG random, float3 position, float3 normal, float solidAngle, out float3 lightDirection, out float lightPDF, out float3 lightPosition, out float2 sampleParams)
 {
 #if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
     lightDirection = 0.0f.xxx;
@@ -735,9 +763,9 @@ float3 sampleLightConeUnorm(Light selectedLight, inout RNG random, float3 positi
         LightArea light = MakeLightArea(selectedLight);
 
         // Sample the selected area light
-        lightDirection = sampleAreaLight(light, randomValues, position, lightPDF, lightPosition, sampleParams);
+        lightDirection = sampleAreaLightAM(light, randomValues, position, lightPDF, lightPosition, sampleParams);
 
-        radiance = evaluateAreaLightCone(light, sampleParams, position, solidAngle);
+        radiance = evaluateAreaLightConeAM(light, sampleParams, position, solidAngle);
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
     else
@@ -788,31 +816,117 @@ float3 sampleLightConeUnorm(Light selectedLight, inout RNG random, float3 positi
         LightEnvironment light = MakeLightEnvironment(selectedLight);
 
         // Sample the environment map
-        lightDirection = sampleEnvironmentLight(light, randomValues, lightPDF);
+        lightDirection = sampleEnvironmentLight(light, randomValues, normal, lightPDF);
 
         radiance = evaluateEnvironmentLightCone(light, lightDirection, solidAngle);
 
-        // Pack light direction into storable UV
-        sampleParams = MapToSphereInverse(lightDirection);
+        // The randomValues are directly mapped to spherical values so can be directly passed through
+        sampleParams = randomValues;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
+    // Discard lights behind surface
+    if (dot(lightDirection, normal) < 0.0f)
+    {
+        lightPDF = 0.0f;
+    }
     if (lightPDF == 0.0f)
     {
         return 0.0f.xxx;
     }
     return radiance;
+#endif
+}
+
+/**
+ * Calculate the area PDF of sampling a given light.
+ * @param selectedLight   The light that was sampled.
+ * @param position        The position on the surface currently being shaded
+ * @param normal          Shading normal vector at current position.
+ * @param lightDirection  The sampled direction to the light.
+ * @param lightPosition   The position on the surface of the light.
+ * @return The calculated PDF with respect to the light.
+ */
+float sampleLightPDFAM(Light selectedLight, float3 position, float3 normal, float3 lightDirection, float3 lightPosition)
+{
+#if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
+    return 0.0f;
+#else
+    float lightPdf;
+#   ifdef HAS_MULTIPLE_LIGHT_TYPES
+    LightType lightType = selectedLight.get_light_type();
+#   endif
+#   ifndef DISABLE_AREA_LIGHTS
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    if (lightType == kLight_Area)
+#       endif
+    {
+        // Get the area light
+        LightArea light = MakeLightArea(selectedLight);
+
+        lightPdf = sampleAreaLightPDFAM(light);
+    }
+#       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
+    else
+#       endif
+#   endif // DISABLE_AREA_LIGHTS
+#   ifndef DISABLE_DELTA_LIGHTS
+    if (lightType == kLight_Point)
+    {
+        // Get the point light
+        LightPoint light = MakeLightPoint(selectedLight);
+
+        lightPdf = samplePointLightPDF(light, position);
+
+    }
+    else if (lightType == kLight_Spot)
+    {
+        // Get the spot light
+        LightSpot light = MakeLightSpot(selectedLight);
+
+        lightPdf = sampleSpotLightPDF(light, position);
+    }
+    else
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    if (lightType == kLight_Direction)
+#       endif
+    {
+        // Get the directional light
+        LightDirectional light = MakeLightDirectional(selectedLight);
+
+        lightPdf = sampleDirectionalLightPDF(light);
+    }
+#       ifndef DISABLE_ENVIRONMENT_LIGHTS
+    else
+#       endif
+#   endif // DISABLE_DELTA_LIGHTS
+#   ifndef DISABLE_ENVIRONMENT_LIGHTS
+    /*lightType == kLight_Environment*/
+    {
+        // Get the environment light
+        LightEnvironment light = MakeLightEnvironment(selectedLight);
+
+        lightPdf = sampleEnvironmentLightPDF(light, lightDirection, normal);
+    }
+#   endif // DISABLE_ENVIRONMENT_LIGHTS
+    // Discard lights behind surface
+    if (dot(lightDirection, normal) < 0.0f)
+    {
+        lightPdf = 0.0f;
+    }
+    return lightPdf;
 #endif
 }
 
 /**
  * Get the direction to a sampled light using a sample values returned from `sampleLight`.
- * @param light         The light that was sampled.
- * @param sampleParams  UV values returned from `sampleLight`.
- * @param position      Current position on surface to get direction from.
- * @param lightPosition (Out) The position of the light sample (only valid if sampled light has a position).
+ * @param light               The light that was sampled.
+ * @param sampleParams        UV values returned from `sampleLight`.
+ * @param position            Current position on surface to get direction from.
+ * @param normal              Shading normal vector at current position.
+ * @param [out] lightPosition The position of the light sample (only valid if sampled light has a position).
  * @return The updated light direction.
  */
-float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, out float3 lightPosition)
+float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, float3 normal, out float3 lightPosition)
 {
 #if defined(DISABLE_AREA_LIGHTS) && defined(DISABLE_DELTA_LIGHTS) && defined(DISABLE_ENVIRONMENT_LIGHTS)
     return 0.0f.xxx;
@@ -827,17 +941,6 @@ float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, out
     {
         // Calculate direction
         lightPosition = interpolate(light.v1.xyz, light.v2.xyz, light.v3.xyz, sampleParams);
-
-        // Need to offset position
-        float3 edge1 = light.v2.xyz - light.v1.xyz;
-        float3 edge2 = light.v3.xyz - light.v1.xyz;
-        float3 lightCross = cross(edge1, edge2);
-        float lightNormalLength = length(lightCross);
-        float3 lightNormal = lightCross / lightNormalLength.xxx;
-        float signedDist = dot(position - light.v1.xyz, lightNormal);
-        lightNormal *= sign(signedDist).xxx;
-        lightPosition = offsetPosition(lightPosition, lightNormal);
-
         return normalize(lightPosition - position);
     }
 #       if !defined(DISABLE_DELTA_LIGHTS) || !defined(DISABLE_ENVIRONMENT_LIGHTS)
@@ -865,7 +968,12 @@ float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, out
 #   ifndef DISABLE_ENVIRONMENT_LIGHTS
     {
         // Convert stored uv back to direction
-        return MapToSphere(sampleParams);
+#       ifdef ENABLE_COSINE_ENVIRONMENT_SAMPLING
+        float3 lightDirection = mapToCosineHemisphere(sampleParams, normal);
+#       else
+        float3 lightDirection = mapToHemisphere(sampleParams, normal);
+#       endif
+        return lightDirection;
     }
 #   endif // DISABLE_ENVIRONMENT_LIGHTS
 #endif
@@ -876,12 +984,13 @@ float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, out
  * @param light        The light that was sampled.
  * @param sampleParams UV values returned from `sampleLight`.
  * @param position     Current position on surface to get direction from.
+ * @param normal       Shading normal vector at current position.
  * @return The updated light direction.
  */
-float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position)
+float3 sampledLightUnpack(Light light, float2 sampleParams, float3 position, float3 normal)
 {
     float3 unused;
-    return sampledLightUnpack(light, sampleParams, position, unused);
+    return sampledLightUnpack(light, sampleParams, position, normal, unused);
 }
 
 #endif // LIGHT_SAMPLING_HLSL

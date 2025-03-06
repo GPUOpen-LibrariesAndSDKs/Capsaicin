@@ -23,17 +23,19 @@ THE SOFTWARE.
 #ifndef LIGHT_SAMPLER_HLSL
 #define LIGHT_SAMPLER_HLSL
 
-#include "../../lights/lights.hlsl"
+#include "lights/lights.hlsl"
 
 // Requires the following data to be defined in any shader that uses this file
 StructuredBuffer<uint> g_LightBufferSize;
 StructuredBuffer<Light> g_LightBuffer;
+#ifdef ENABLE_PREVIOUS_LIGHTS
+StructuredBuffer<Light> g_PrevLightBuffer;
+#endif
 RWStructuredBuffer<uint> g_LightInstanceBuffer;
-RWStructuredBuffer<uint> g_LightInstancePrimitiveBuffer;
 
 /**
  * Check if the current scene has an environment light.
- * @returns True if environment light could be found.
+ * @return True if environment light could be found.
  */
 bool hasLights()
 {
@@ -42,7 +44,7 @@ bool hasLights()
 
 /**
  * Get number of lights.
- * @returns The number of lights currently in the scene.
+ * @return The number of lights currently in the scene.
  */
 uint getNumberLights()
 {
@@ -52,19 +54,32 @@ uint getNumberLights()
 /**
  * Get a light corresponding to a light index.
  * @param index The index of the light to retrieve (range [0, getNumberLights())).
- * @returns The number of lights currently in the scene.
+ * @return The number of lights currently in the scene.
  */
 Light getLight(uint index)
 {
     return g_LightBuffer[index];
 }
 
+#ifdef ENABLE_PREVIOUS_LIGHTS
+/**
+ * Get a light corresponding to a light index.
+ * @param index The index of the light to retrieve (range [0, getNumberLights())).
+ * @return The number of lights currently in the scene.
+ */
+Light getPreviousLight(uint index)
+{
+    return g_PrevLightBuffer[index];
+}
+#endif // ENABLE_PREVIOUS_LIGHTS
+
 /**
  * Check if the current scene has an environment light.
- * @returns True if environment light could be found.
+ * @return True if environment light could be found.
  */
 bool hasEnvironmentLight()
 {
+#ifndef DISABLE_ENVIRONMENT_LIGHTS
     if (g_LightBufferSize[0] == 0)
     {
         return false;
@@ -72,12 +87,15 @@ bool hasEnvironmentLight()
     // Assumes that the environment light is always first
     Light selectedLight = g_LightBuffer[0];
     return selectedLight.get_light_type() == kLight_Environment;
+#else
+    return false;
+#endif // DISABLE_ENVIRONMENT_LIGHTS
 }
 
 /**
  * Get the current environment map.
  * @note This is only valid if the scene contains a valid environment map.
- * @returns The environment map.
+ * @return The environment map.
  */
 LightEnvironment getEnvironmentLight()
 {
@@ -85,15 +103,24 @@ LightEnvironment getEnvironmentLight()
 }
 
 /**
+ * Get the environment map ID.
+ * @return the ID.
+ */
+uint getEnvironmentLightIndex()
+{
+    return 0;
+}
+
+/**
  * Get the light ID for a specific area light.
  * @note The inputs are not checked to ensure they actually map to a valid emissive surface.
  * @param instanceIndex  Instance ID of requested area light.
  * @param primitiveIndex Primitive ID of requested area light.
- * @returns The light ID, undefined if inputs are invalid.
+ * @return The light ID, undefined if inputs are invalid.
  */
 uint getAreaLightIndex(uint instanceIndex, uint primitiveIndex)
 {
-    return g_LightInstancePrimitiveBuffer[primitiveIndex + g_LightInstanceBuffer[instanceIndex]];
+    return primitiveIndex + g_LightInstanceBuffer[instanceIndex];
 }
 
 #endif

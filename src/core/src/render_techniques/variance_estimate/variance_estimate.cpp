@@ -27,7 +27,7 @@ namespace Capsaicin
 {
 VarianceEstimate::VarianceEstimate()
     : RenderTechnique("Variance Estimate")
-    , cv_(0.0f)
+    , cv_(0.0F)
     , readback_buffer_index_(0)
 {}
 
@@ -36,11 +36,11 @@ VarianceEstimate::~VarianceEstimate()
     terminate();
 }
 
-AOVList VarianceEstimate::getAOVs() const noexcept
+SharedTextureList VarianceEstimate::getSharedTextures() const noexcept
 {
-    AOVList aovs;
-    aovs.push_back({"Color", AOV::Read});
-    return aovs;
+    SharedTextureList textures;
+    textures.push_back({"Color", SharedTexture::Access::Read});
+    return textures;
 }
 
 bool VarianceEstimate::init(CapsaicinInternal const &capsaicin) noexcept
@@ -57,8 +57,8 @@ bool VarianceEstimate::init(CapsaicinInternal const &capsaicin) noexcept
         readback_buffers_[i].setName(buffer);
     }
 
-    variance_estimate_program_ = gfxCreateProgram(
-        gfx_, "render_techniques/variance_estimate/variance_estimate", capsaicin.getShaderPath());
+    variance_estimate_program_ =
+        capsaicin.createProgram("render_techniques/variance_estimate/variance_estimate");
     compute_mean_kernel_      = gfxCreateComputeKernel(gfx_, variance_estimate_program_, "ComputeMean");
     compute_distance_kernel_  = gfxCreateComputeKernel(gfx_, variance_estimate_program_, "ComputeDistance");
     compute_deviation_kernel_ = gfxCreateComputeKernel(gfx_, variance_estimate_program_, "ComputeDeviation");
@@ -68,12 +68,12 @@ bool VarianceEstimate::init(CapsaicinInternal const &capsaicin) noexcept
 
 void VarianceEstimate::render(CapsaicinInternal &capsaicin) noexcept
 {
-    uint32_t const buffer_dimensions[] = {capsaicin.getWidth(), capsaicin.getHeight()};
+    auto const buffer_dimensions = capsaicin.getRenderDimensions();
 
-    uint32_t const  pixel_count  = buffer_dimensions[0] * buffer_dimensions[1];
+    uint32_t const  pixel_count  = buffer_dimensions.x * buffer_dimensions.y;
     uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, compute_mean_kernel_);
-    uint32_t const  num_groups_x = (buffer_dimensions[0] + num_threads[0] - 1) / num_threads[0];
-    uint32_t const  num_groups_y = (buffer_dimensions[1] + num_threads[1] - 1) / num_threads[1];
+    uint32_t const  num_groups_x = (buffer_dimensions.x + num_threads[0] - 1) / num_threads[0];
+    uint32_t const  num_groups_y = (buffer_dimensions.y + num_threads[1] - 1) / num_threads[1];
     uint32_t const  elem_count =
         (pixel_count + num_threads[0] * num_threads[1] - 1) / (num_threads[0] * num_threads[1]);
 
@@ -100,7 +100,7 @@ void VarianceEstimate::render(CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, variance_estimate_program_, "g_BufferDimensions", buffer_dimensions);
 
     gfxProgramSetParameter(
-        gfx_, variance_estimate_program_, "g_ColorBuffer", capsaicin.getAOVBuffer("Color"));
+        gfx_, variance_estimate_program_, "g_ColorBuffer", capsaicin.getSharedTexture("Color"));
 
     gfxProgramSetParameter(gfx_, variance_estimate_program_, "g_MeanBuffer", mean_buffer_);
     gfxProgramSetParameter(gfx_, variance_estimate_program_, "g_SquareBuffer", square_buffer_);

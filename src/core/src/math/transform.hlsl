@@ -28,7 +28,7 @@ THE SOFTWARE.
 /**
  * Determine a transformation matrix to correctly transform normal vectors.
  * @param transform The original transform matrix.
- * @returns The new transform matrix.
+ * @return The new transform matrix.
  */
 float3x3 getNormalTransform(float3x3 transform)
 {
@@ -55,7 +55,7 @@ float3x3 getNormalTransform(float3x3 transform)
  * @note This correctly handles converting the transform to operate correctly on a surface normal.
  * @param normal    The normal vector.
  * @param transform The transform matrix.
- * @returns The transformed normal.
+ * @return The transformed normal.
  */
 float3 transformNormal(const float3 normal, const float3x4 transform)
 {
@@ -67,7 +67,7 @@ float3 transformNormal(const float3 normal, const float3x4 transform)
  * Transform a 3D direction vector.
  * @param values    The direction vector.
  * @param transform The transform matrix.
- * @returns The new transform matrix.
+ * @return The new transform matrix.
  */
 float3 transformVector(const float3 values, const float3x4 transform)
 {
@@ -78,7 +78,7 @@ float3 transformVector(const float3 values, const float3x4 transform)
  * Transform a 3D point by an affine matrix.
  * @param direction The direction vector.
  * @param transform The transform matrix.
- * @returns The new transform matrix.
+ * @return The new transform matrix.
  */
 float3 transformPoint(const float3 values, const float3x4 transform)
 {
@@ -91,13 +91,67 @@ float3 transformPoint(const float3 values, const float3x4 transform)
  *  normalisation of the result by the 'w' component.
  * @param direction The direction vector.
  * @param transform The transform matrix.
- * @returns The new transform matrix.
+ * @return The new transform matrix.
  */
 float3 transformPointProjection(const float3 values, const float4x4 transform)
 {
     float4 ret = mul(transform, float4(values, 1.0f));
     ret.xyz /= ret.w; // perspective divide
     return ret.xyz;
+}
+
+/**
+ * Transform a 3D point created from a UV pair and depth.
+ * @note This version of transforming a point assumes a non-affine matrix and will handle
+ *  normalisation of the result by the 'w' component.
+ * @param uv        The UV coordinates to build point from.
+ * @param depth     The depth value to build point from.
+ * @param transform The transform matrix.
+ * @return The new transform matrix.
+ */
+float3 transformPointProjection(float2 uv, float depth, float4x4 transform)
+{
+    return transformPointProjection(float3(2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f, depth), transform);
+}
+
+/**
+ * Linearise a perspective depth/z value created using standard depth comparisons.
+ * @param depth   The perspective depth value.
+ * @param nearFar The near/far values used when creating the perspective depth (i.e. camera near/far).
+ * @return The new linearised depth.
+ */
+float toLinearDepthForward(float depth, float2 nearFar)
+{
+    return -nearFar.x * nearFar.y / (depth * (nearFar.y - nearFar.x) - nearFar.y);
+}
+
+/**
+ * Linearise a perspective depth/z value created using reverse depth comparisons.
+ * @param depth   The perspective depth value.
+ * @param nearFar The near/far values used when creating the perspective depth (i.e. camera near/far).
+ * @return The new linearised depth.
+ */
+float toLinearDepthInverse(float depth, float2 nearFar)
+{
+    return (nearFar.x * nearFar.y) / (nearFar.x + (depth * (nearFar.y - nearFar.x)));
+}
+
+/**
+ * Linearise a perspective depth/z value.
+ * @note This uses an reverse-Z convention.
+ * @param depth   The perspective depth value.
+ * @param nearFar The near/far values used when creating the perspective depth (i.e. camera near/far).
+ * @return The new linearised depth.
+ */
+float toLinearDepth(float depth, float2 nearFar)
+{
+    // Uses reverse-Z convention
+    return (nearFar.x * nearFar.y) / (nearFar.x + (depth * (nearFar.y - nearFar.x)));
+}
+float4 toLinearDepth(float4 depth, float2 nearFar)
+{
+    // Uses reverse-Z convention
+    return (nearFar.x * nearFar.y) / (nearFar.x + (depth * (nearFar.y - nearFar.x)));
 }
 
 #endif // MATH_HLSL

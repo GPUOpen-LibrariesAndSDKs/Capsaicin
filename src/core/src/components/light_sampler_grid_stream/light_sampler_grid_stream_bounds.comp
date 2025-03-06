@@ -1,0 +1,83 @@
+﻿/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "components/light_sampler_grid_cdf/light_sampler_grid_shared.h"
+
+RWStructuredBuffer<LightSamplingConfiguration> g_LightSampler_Configuration;
+ConstantBuffer<LightSamplingConstants> g_LightSampler_Constants;
+RWStructuredBuffer<DispatchCommand> g_DispatchCommandBuffer;
+
+RWStructuredBuffer<float3> g_LightSampler_MinBounds;
+RWStructuredBuffer<float3> g_LightSampler_MaxBounds;
+
+#include "components/light_builder/light_builder.hlsl"
+
+#define THREADX 128 // Must match light_sampler_grid_stream_build.comp
+#define THREADY 1
+#define THREADZ 1
+
+#ifdef LIGHTSAMPLERSTREAM_RES_MANYLIGHTS
+#define LS_GRID_STREAM_THREADREDUCE 128 /**< Size of thread group when using parallel build */
+#endif
+
+/**
+ * Create required internal configuration values.
+ * Calculates the required number of grid cells that need to be dispatched through an indirect call to Build.
+ */
+[numthreads(1, 1, 1)]
+void CalculateBounds()
+{
+    // Get the scene bounds
+    const float3 sceneMin = g_LightSampler_MinBounds[0];
+    const float3 sceneMax = g_LightSampler_MaxBounds[0];
+
+    // Ensure each cell is square
+    const float3 sceneExtent = sceneMax - sceneMin;
+    const float largestAxis = max(sceneExtent.x, max(sceneExtent.y, sceneExtent.z));
+    const float cellScale = largestAxis / g_LightSampler_Constants.maxCellsPerAxis;
+    const float3 cellNum = ceil(sceneExtent / cellScale);
+
+    // Clamp max number of lights to those actually available
+    const uint lightsPerCell = min(g_LightSampler_Constants.maxNumLightsPerCell, getNumberLights());
+
+    // Update internal configuration values
+    uint3 groups = (uint3) cellNum;
+    g_LightSampler_Configuration[0].numCells = uint4(groups, lightsPerCell);
+    g_LightSampler_Configuration[0].cellSize = sceneExtent / cellNum;
+    g_LightSampler_Configuration[0].sceneMin = sceneMin;
+    g_LightSampler_Configuration[0].sceneExtent = sceneExtent;
+
+    // Get total number of grid cells
+    groups.x *= lightsPerCell;
+#ifdef LIGHTSAMPLERSTREAM_USE_OCTAHEDRON_SAMPLING
+    groups.x *= 8;
+#endif
+#ifdef LIGHTSAMPLERSTREAM_RES_MANYLIGHTS
+    groups.x *= LS_GRID_STREAM_THREADREDUCE;
+#endif
+
+    const uint3 dispatch = uint3(THREADX, THREADY, THREADZ);
+    groups = (groups + dispatch - 1.xxx) / dispatch;
+    g_DispatchCommandBuffer[0].num_groups_x = groups.x;
+    g_DispatchCommandBuffer[0].num_groups_y = groups.y;
+    g_DispatchCommandBuffer[0].num_groups_z = groups.z;
+}

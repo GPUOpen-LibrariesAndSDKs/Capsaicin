@@ -1,0 +1,134 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "gpu_shared.h"
+#include "math/color.hlsl"
+
+uint2 g_InputDimensions;
+uint2 g_OutputDimensions;
+
+#if defined(TYPE_VEC4)
+#define TYPE float4
+#elif defined(TYPE_VEC3)
+#define TYPE float3
+#elif defined(TYPE_VEC2)
+#define TYPE float2
+#else
+#define TYPE float
+#endif
+Texture2D<TYPE> g_SourceImage;
+RWTexture2D<TYPE> g_OutputImage;
+
+#define GROUP_SIZE 16
+
+[numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
+void GenerateMip(uint2 did : SV_DispatchThreadID)
+{
+    if (any(did >= g_OutputDimensions))
+    {
+        return;
+    }
+
+    // Get 4 texels
+    uint2 pix0 = did * 2;
+    uint2 pix1 = pix0 + 1;
+    TYPE a00 = g_SourceImage[pix0];
+    TYPE a10 = g_SourceImage[uint2(pix1.x, pix0.y)];
+    TYPE a01 = g_SourceImage[uint2(pix0.x, pix1.y)];
+    TYPE a11 = g_SourceImage[pix1];
+
+    TYPE output;
+
+    // Check for odd image dimensions
+    bool2 dimensionCheck = (g_InputDimensions & 1) != 0;
+    // GPUs use round down when calculating mip levels. This means that when generating a low mip level
+    //  for a odd sized texture we must take samples from a fraction of pixel either side of the window.
+    // Since fractional pixels are not possible then these samples are taken with correspondingly reduced weight.
+    // In the case of depth samples these texels are read as is resulting in a larger sample window being used.
+
+#ifndef TYPE_DEPTH
+    float2 weightScale = 1.0f.xx / (float2)g_InputDimensions;
+    float2 w0 = (float2)(g_OutputDimensions - did) * weightScale;
+    float2 w1 = (float2)g_OutputDimensions * weightScale;
+    float2 w2 = (float2)(did + 1) * weightScale;
+
+    output = a00 * w0.x * w0.y;
+    output += a10 * w1.x * w0.y;
+    output += a01 * w0.x * w1.y;
+    output += a11 * w1.x * w1.y;
+#elif defined(DEPTH_MIN)
+    output = min(min(a00, a10), min(a01, a11));
+#else
+    output = max(max(a00, a10), max(a01, a11));
+#endif
+    
+    uint2 pix2 = pix0 + 2;
+    if (dimensionCheck.x)
+    {
+        TYPE a20 = g_SourceImage[uint2(pix2.x, pix0.y)];
+        TYPE a21 = g_SourceImage[uint2(pix2.x, pix1.y)];
+#ifndef TYPE_DEPTH
+        output += a20 * w2.x * w0.y;
+        output += a21 * w2.x * w1.y;
+#elif defined(DEPTH_MIN)
+        output = min(min(a20, a21), output);
+#else
+        output = max(max(a20, a21), output);
+#endif
+    }
+
+    if (dimensionCheck.y)
+    {
+        TYPE a02 = g_SourceImage[uint2(pix0.x, pix2.y)];
+        TYPE a12 = g_SourceImage[uint2(pix1.x, pix2.y)];
+#ifndef TYPE_DEPTH
+        output += a02 * w0.x * w2.y;
+        output += a12 * w1.x * w2.y;
+#elif defined(DEPTH_MIN)
+        output = min(min(a02, a12), output);
+#else
+        output = max(max(a02, a12), output);
+#endif
+    }
+
+    if (all(dimensionCheck))
+    {
+        TYPE a22 = g_SourceImage[pix2];
+#ifndef TYPE_DEPTH
+        output += a22 * w2.x * w2.y;
+#elif defined(DEPTH_MIN)
+        output = min(a22, output);
+#else
+        output = max(a22, output);
+#endif
+    }
+
+#ifndef INPUT_LINEAR
+    // Convert to sRGB
+#   ifdef TYPE_VEC4
+    output = float4(convertToSRGB(output.xyz), output.w);
+#   else
+    output = convertToSRGB(output);
+#   endif
+#endif
+    g_OutputImage[did] = output;
+}

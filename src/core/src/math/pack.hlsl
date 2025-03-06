@@ -23,17 +23,17 @@ THE SOFTWARE.
 #ifndef PACK_HLSL
 #define PACK_HLSL
 
-#include "../gpu_shared.h"
+#include "gpu_shared.h"
 
 /**
  * Convert float value to single 8bit unorm.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float value.
- * @returns 8bit unorm in lower 8bits, high bits are all zero.
+ * @return 8bit unorm in lower 8bits, high bits are all zero.
  */
 uint packUnorm1x8(float value)
 {
-    uint packedValue = uint(saturate(value) * 255.0f);
+    uint packedValue = uint(saturate(value) * 255.0f + 0.5f);
     return packedValue;
 }
 
@@ -41,11 +41,11 @@ uint packUnorm1x8(float value)
  * Pack 2 float values to 8bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit unorms in lower bits, high bits are all zero.
+ * @return Packed 8bit unorms in lower bits, high bits are all zero.
  */
 uint packUnorm2x8(float2 value)
 {
-    uint2 packedValue = uint2(saturate(value) * 255.0f.xx);
+    uint2 packedValue = uint2(saturate(value) * 255.0f.xx + 0.5f.xx);
     return packedValue.x | (packedValue.y << 8);
 }
 
@@ -53,11 +53,11 @@ uint packUnorm2x8(float2 value)
  * Pack 3 float values to 8bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit unorms in lower bits, high bits are all zero.
+ * @return Packed 8bit unorms in lower bits, high bits are all zero.
  */
 uint packUnorm3x8(float3 value)
 {
-    uint3 packedValue = uint3(saturate(value) * 255.0f.xxx);
+    uint3 packedValue = uint3(saturate(value) * 255.0f.xxx + 0.5f.xxx);
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16);
 }
 
@@ -65,18 +65,18 @@ uint packUnorm3x8(float3 value)
  * Pack 4 float values to 8bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit unorms.
+ * @return Packed 8bit unorms.
  */
 uint packUnorm4x8(float4 value)
 {
-    uint4 packedValue = uint4(saturate(value) * 255.0f.xxxx);
+    uint4 packedValue = uint4(saturate(value) * 255.0f.xxxx + 0.5f.xxxx);
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16) | (packedValue.w << 24);
 }
 
 /**
  * Convert 8bit unorm to float.
  * @param packedValue Input unorm value to convert.
- * @returns Converted float value (range [0,1]).
+ * @return Converted float value (range [0,1]).
  */
 float unpackUnorm1x8(uint packedValue)
 {
@@ -86,7 +86,7 @@ float unpackUnorm1x8(uint packedValue)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float2 unpackUnorm2x8(uint packedValue)
 {
@@ -97,7 +97,7 @@ float2 unpackUnorm2x8(uint packedValue)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float3 unpackUnorm3x8(uint packedValue)
 {
@@ -109,7 +109,7 @@ float3 unpackUnorm3x8(uint packedValue)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float4 unpackUnorm4x8(uint packedValue)
 {
@@ -121,11 +121,11 @@ float4 unpackUnorm4x8(uint packedValue)
  * Convert float value to single 8bit snorm.
  * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float value.
- * @returns 8bit snorm in lower 8bits, high bits are all zero.
+ * @return 8bit snorm in lower 8bits, high bits are all zero.
  */
 uint packSnorm1x8(float value)
 {
-    uint packedValue = uint(clamp(value, -1.0f, 1.0f) * 127.0f + (0.5f * sign(value)));
+    int packedValue = int(clamp(value, -1.0f, 1.0f) * 127.0f + (0.5f * sign(value))) & 0xFF;
     return packedValue;
 }
 
@@ -133,11 +133,11 @@ uint packSnorm1x8(float value)
  * Pack 2 float values to 8bit snorm values.
  * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit snorms in lower bits, high bits are all zero.
+ * @return Packed 8bit snorms in lower bits, high bits are all zero.
  */
 uint packSnorm2x8(float2 value)
 {
-    uint2 packedValue = uint2(clamp(value, -1.0f.xx, 1.0f.xx) * 127.0f.xx + (0.5f.xx * sign(value))) & 0xFFu.xx;
+    int2 packedValue = int2(clamp(value, -1.0f.xx, 1.0f.xx) * 127.0f.xx + (0.5f.xx * sign(value))) & 0xFF.xx;
     return packedValue.x | (packedValue.y << 8);
 }
 
@@ -145,11 +145,11 @@ uint packSnorm2x8(float2 value)
  * Pack 3 float values to 8bit snorm values.
  * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit snorms in lower bits, high bits are all zero.
+ * @return Packed 8bit snorms in lower bits, high bits are all zero.
  */
 uint packSnorm3x8(float3 value)
 {
-    uint3 packedValue = uint3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 127.0f.xxx + (0.5f.xxx * sign(value))) & 0xFFu.xxx;
+    int3 packedValue = int3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 127.0f.xxx + (0.5f.xxx * sign(value))) & 0xFF.xxx;
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16);
 }
 
@@ -157,55 +157,55 @@ uint packSnorm3x8(float3 value)
  * Pack 4 float values to 8bit snorm values.
  * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 8bit snorms.
+ * @return Packed 8bit snorms.
  */
 uint packSnorm4x8(float4 value)
 {
-    uint4 packedValue = uint4(clamp(value, -1.0f.xxxx, 1.0f.xxxx) * 127.0f.xxxx + (0.5f.xxxx * sign(value))) & 0xFFu.xxxx;
+    int4 packedValue = int4(clamp(value, -1.0f.xxxx, 1.0f.xxxx) * 127.0f.xxxx + (0.5f.xxxx * sign(value))) & 0xFF.xxxx;
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16) | (packedValue.w << 24);
 }
 
 /**
  * Convert 8bit snorm to float.
  * @param packedValue Input snorm value to convert.
- * @returns Converted float value (range [-1,1]).
+ * @return Converted float value (range [-1,1]).
  */
 float unpackSnorm1x8(uint packedValue)
 {
-    return float(packedValue & 0xFFu) * (1.0f / 127.0f);
+    int value = int(packedValue << 24) >> 24;
+    return float(value) * (1.0f / 127.0f);
 }
 
 /**
  * Convert 8bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [-1,1]).
+ * @return Converted float values (range [-1,1]).
  */
 float2 unpackSnorm2x8(uint packedValue)
 {
-    uint2 value = uint2(packedValue, packedValue >> 8) & 0xFFu.xx;
+    int2 value = int2(int(packedValue << 24), int(packedValue << 16)) >> 24;
     return float2(value) * (1.0f / 127.0f).xx;
 }
 
 /**
  * Convert 8bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [-1,1]).
+ * @return Converted float values (range [-1,1]).
  */
 float3 unpackSnorm3x8(uint packedValue)
 {
-    uint3 value = uint3(packedValue, packedValue >> 8,
-        packedValue >> 16) & 0xFFu.xxx;
+    int3 value = int3(int(packedValue << 24), int(packedValue << 16), int(packedValue << 8)) >> 24;
     return float3(value) * (1.0f / 127.0f).xxx;
 }
 
 /**
  * Convert 8bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [-1,1]).
+ * @return Converted float values (range [-1,1]).
  */
 float4 unpackSnorm4x8(uint packedValue)
 {
-    uint4 value = uint4(packedValue, packedValue >> 8, packedValue >> 16, packedValue >> 24) & 0xFFu.xxxx;
+    int4 value = int4(int(packedValue << 24), int(packedValue << 16), int(packedValue << 8), int(packedValue)) >> 24;
     return float4(value) * (1.0f / 127.0f).xxxx;
 }
 
@@ -213,11 +213,11 @@ float4 unpackSnorm4x8(uint packedValue)
  * Convert float value to single 16bit unorm.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float value.
- * @returns 16bit unorm in lower 16bits, high bits are all zero.
+ * @return 16bit unorm in lower 16bits, high bits are all zero.
  */
 uint packUnorm1x16(float value)
 {
-    uint packedValue = uint(saturate(value) * 65535.0f);
+    uint packedValue = uint(saturate(value) * 65535.0f + 0.5f);
     return packedValue;
 }
 
@@ -225,11 +225,11 @@ uint packUnorm1x16(float value)
  * Pack 2 float values to 16bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit unorms
+ * @return Packed 16bit unorms
  */
 uint packUnorm2x16(float2 value)
 {
-    uint2 packedValue = uint2(saturate(value) * 65535.0f);
+    uint2 packedValue = uint2(saturate(value) * 65535.0f.xx + 0.5f.xx);
     return packedValue.x | (packedValue.y << 16);
 }
 
@@ -237,11 +237,11 @@ uint packUnorm2x16(float2 value)
  * Pack 3 float values to 16bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit unorms.
+ * @return Packed 16bit unorms.
  */
 uint2 packUnorm3x16(float3 value)
 {
-    uint3 packedValue = uint3(saturate(value) * 65535.0f);
+    uint3 packedValue = uint3(saturate(value) * 65535.0f.xxx + 0.5f.xxx);
     return uint2(packedValue.x | (packedValue.y << 16), packedValue.z);
 }
 
@@ -249,18 +249,18 @@ uint2 packUnorm3x16(float3 value)
  * Pack 4 float values to 16bit unorm values.
  * @note Input values are clamped to the [0, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit unorms.
+ * @return Packed 16bit unorms.
  */
 uint2 packUnorm4x16(float4 value)
 {
-    uint4 packedValue = uint4(saturate(value) * 65535.0f);
+    uint4 packedValue = uint4(saturate(value) * 65535.0f.xxxx + 0.5f.xxxx);
     return uint2(packedValue.x | (packedValue.y << 16), packedValue.z | (packedValue.w << 16));
 }
 
 /**
  * Convert 16bit unorm to float.
  * @param packedValue Input unorm value to convert.
- * @returns Converted float value (range [0,1]).
+ * @return Converted float value (range [0,1]).
  */
 float unpackUnorm1x16(uint packedValue)
 {
@@ -270,7 +270,7 @@ float unpackUnorm1x16(uint packedValue)
 /**
  * Convert 16bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float2 unpackUnorm2x16(uint packedValue)
 {
@@ -281,7 +281,7 @@ float2 unpackUnorm2x16(uint packedValue)
 /**
  * Convert 16bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float3 unpackUnorm3x16(uint packedValue)
 {
@@ -293,7 +293,7 @@ float3 unpackUnorm3x16(uint packedValue)
 /**
  * Convert 16bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float4 unpackUnorm4x16(uint packedValue)
 {
@@ -304,100 +304,100 @@ float4 unpackUnorm4x16(uint packedValue)
 
 /**
  * Convert float value to single 16bit snorm.
- * @note Input values are clamped to the [0, 1] range.
+ * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float value.
- * @returns 16bit snorm in lower 16bits, high bits are all zero.
+ * @return 16bit snorm in lower 16bits, high bits are all zero.
  */
 uint packSnorm1x16(float value)
 {
-    uint packedValue = uint(clamp(value, -1.0f, 1.0f) * 32767.0f + (0.5f * sign(value)));
+    int packedValue = int(clamp(value, -1.0f, 1.0f) * 32767.0f + (0.5f * sign(value))) & 0xFFFF;
     return packedValue;
 }
 
 /**
  * Pack 2 float values to 16bit snorm values.
- * @note Input values are clamped to the [0, 1] range.
+ * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit snorms
+ * @return Packed 16bit snorms
  */
 uint packSnorm2x16(float2 value)
 {
-    uint2 packedValue = uint2(clamp(value, -1.0f.xx, 1.0f.xx) * 32767.0f.xx + (0.5f.xx * sign(value)));
+    int2 packedValue = int2(clamp(value, -1.0f.xx, 1.0f.xx) * 32767.0f.xx + (0.5f.xx * sign(value))) & 0xFFFF.xx;
     return packedValue.x | (packedValue.y << 8);
 }
 
 /**
  * Pack 3 float values to 16bit snorm values.
- * @note Input values are clamped to the [0, 1] range.
+ * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit snorms.
+ * @return Packed 16bit snorms.
  */
 uint2 packSnorm3x16(float3 value)
 {
-    uint3 packedValue = uint3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 32767.0f.xxx + (0.5f.xxx * sign(value)));
+    int3 packedValue = int3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 32767.0f.xxx + (0.5f.xxx * sign(value))) & 0xFFFF.xxx;
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16);
 }
 
 /**
  * Pack 4 float values to 16bit snorm values.
- * @note Input values are clamped to the [0, 1] range.
+ * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 16bit snorms.
+ * @return Packed 16bit snorms.
  */
 uint2 packSnorm4x16(float4 value)
 {
-    uint4 packedValue = uint4(clamp(value, -1.0f.xxxx, 1.0f.xxxx) * 32767.0f.xxxx + (0.5f.xxxx * sign(value)));
+    int4 packedValue = int4(clamp(value, -1.0f.xxxx, 1.0f.xxxx) * 32767.0f.xxxx + (0.5f.xxxx * sign(value))) & 0xFFFF.xxxx;
     return packedValue.x | (packedValue.y << 8) | (packedValue.z << 16) | (packedValue.w << 24);
 }
 
 /**
  * Convert 16bit snorm to float.
  * @param packedValue Input snorm value to convert.
- * @returns Converted float value (range [0,1]).
+ * @return Converted float value (range [-1,1]).
  */
 float unpackSnorm1x16(uint packedValue)
 {
-    return float(packedValue & 0xFFFFu) * (1.0f / 32767.0f);
+    int value = int(packedValue << 16) >> 16;
+    return float(value * (1.0f / 32767.0f));
 }
 
 /**
  * Convert 16bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [0,1]).
  */
 float2 unpackSnorm2x16(uint packedValue)
 {
-    uint2 value = uint2(packedValue, packedValue >> 8) & 0xFFFFu.xx;
+    int2 value = int2(packedValue << 16, packedValue) >> 16;
     return float2(value) * (1.0f / 32767.0f).xx;
 }
 
 /**
  * Convert 16bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [-1,1]).
  */
-float3 unpackSnorm3x16(uint packedValue)
+float3 unpackSnorm3x16(uint2 packedValue)
 {
-    uint3 value = uint3(packedValue, packedValue >> 8,
-        packedValue >> 16) & 0xFFFFu.xxx;
+    int3 value = int3(packedValue.x << 16, packedValue.x, packedValue.y << 16) >> 16;
     return float3(value) * (1.0f / 32767.0f).xxx;
 }
 
 /**
  * Convert 16bit snorms to floats.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values (range [-1,1]).
  */
-float4 unpackSnorm4x16(uint packedValue)
+float4 unpackSnorm4x16(uint2 packedValue)
 {
-    uint4 value = uint4(packedValue, packedValue >> 8, packedValue >> 16, packedValue >> 24) & 0xFFFFu.xxxx;
+    int4 value = int4(packedValue.x << 16, packedValue.x, packedValue.y << 16, packedValue.y) >> 16;
     return float4(value) * (1.0f / 32767.0f).xxxx;
 }
 
 /**
  * Pack 2 float values as half precision.
  * @param value Input float values to pack.
- * @returns Packed 16bit half values.
+ * @return Packed 16bit half values.
  */
 uint packHalf2(float2 value)
 {
@@ -408,7 +408,7 @@ uint packHalf2(float2 value)
 /**
  * Pack 3 float values as half precision.
  * @param value Input float values to pack.
- * @returns Packed 16bit half values.
+ * @return Packed 16bit half values.
  */
 uint2 packHalf3(float3 value)
 {
@@ -420,7 +420,7 @@ uint2 packHalf3(float3 value)
 /**
  * Pack 4 float values as half precision.
  * @param value Input float values to pack.
- * @returns Packed 16bit half values.
+ * @return Packed 16bit half values.
  */
 uint2 packHalf4(float4 value)
 {
@@ -432,7 +432,7 @@ uint2 packHalf4(float4 value)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values.
  */
 float2 unpackHalf2(uint packedValue)
 {
@@ -442,7 +442,7 @@ float2 unpackHalf2(uint packedValue)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values.
  */
 float3 unpackHalf3(uint2 packedValue)
 {
@@ -453,7 +453,7 @@ float3 unpackHalf3(uint2 packedValue)
 /**
  * Convert 8bit unorms to floats.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values (range [0,1]).
+ * @return Converted float values.
  */
 float4 unpackHalf4(uint2 packedValue)
 {
@@ -465,30 +465,29 @@ float4 unpackHalf4(uint2 packedValue)
  * Pack normal vector values to 10bit snorm values.
  * @note Input values are clamped to the [-1, 1] range.
  * @param value Input float values to pack.
- * @returns Packed 10bit snorms in lower bits, high bits are all zero.
+ * @return Packed 10bit snorms in lower bits, high bits are all zero.
  */
 uint packNormal(float3 value)
 {
-    uint3 packedValue = uint3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 511.0f.xxx + (0.5f.xxx * sign(value))) & 0x3FFu.xxx;
+    int3 packedValue = int3(clamp(value, -1.0f.xxx, 1.0f.xxx) * 511.0f.xxx + (0.5f.xxx * sign(value))) & 0x3FFu.xxx;
     return packedValue.x | (packedValue.y << 10) | (packedValue.z << 20);
 }
 
 /**
  * Convert 10bit snorms to normal vector.
  * @param packedValue Input snorm values to convert.
- * @returns Converted float values (range [-1,1]).
+ * @return Converted float values (range [-1,1]).
  */
 float3 unpackNormal(uint packedValue)
 {
-    uint3 value = uint3(packedValue, packedValue >> 10,
-        packedValue >> 20) & 0x3FFu.xxx;
+    int3 value = int3(packedValue << 22, packedValue << 12, packedValue << 2) >> 22;
     return float3(value) * (1.0f / 511.0f).xxx;
 }
 
 /**
  * Pack UV values values to 16bit floats.
  * @param value Input float values to pack.
- * @returns Packed 16 half precision values as single float.
+ * @return Packed 16 half precision values as single float.
  */
 float packUVs(float2 value)
 {
@@ -498,7 +497,7 @@ float packUVs(float2 value)
 /**
  * Convert 16bit halfs to UV values.
  * @param packedValue Input unorm values to convert.
- * @returns Converted float values.
+ * @return Converted float values.
  */
 float2 unpackUVs(float packedValue)
 {

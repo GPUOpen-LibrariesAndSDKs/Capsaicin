@@ -20,14 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
-#include "../../gpu_shared.h"
+#include "gpu_shared.h"
 
 Texture2D g_VisibilityBuffer;
 Texture2D g_DepthBuffer;
 
 StructuredBuffer<uint> g_IndexBuffer;
 StructuredBuffer<Vertex> g_VertexBuffer;
-StructuredBuffer<Mesh> g_MeshBuffer;
+uint g_VertexDataIndex;
 StructuredBuffer<Instance> g_InstanceBuffer;
 StructuredBuffer<Material> g_MaterialBuffer;
 
@@ -36,15 +36,15 @@ SamplerState g_TextureSampler;
 
 uint g_MaterialMode;
 
-#include "../../materials/material_evaluation.hlsl"
-#include "../../geometry/geometry.hlsl"
-#include "../../geometry/mesh.hlsl"
+#include "materials/material_evaluation.hlsl"
+#include "geometry/geometry.hlsl"
+#include "geometry/mesh.hlsl"
 
 float4 DebugMaterial(in float4 pos : SV_Position) : SV_Target
 {
     uint2 did = uint2(pos.xy);
 
-    if (g_DepthBuffer[did].x >= 1.0f)
+    if (g_DepthBuffer[did].x <= 0.0f)
     {
         return float4(0.0f, 0.0f, 0.0f, 1.0f);
     }
@@ -54,10 +54,9 @@ float4 DebugMaterial(in float4 pos : SV_Position) : SV_Target
     uint primitiveID = asuint(visibility.w);
 
     Instance instance = g_InstanceBuffer[instanceID];
-    Mesh mesh = g_MeshBuffer[instance.mesh_index];
 
     // Get UV values from buffers
-    UVs uvs = fetchUVs(mesh, primitiveID);
+    UVs uvs = fetchUVs(instance, primitiveID);
     float2 mesh_uv = interpolate(uvs.uv0, uvs.uv1, uvs.uv2, visibility.xy);
 
     Material material = g_MaterialBuffer[instance.material_index];

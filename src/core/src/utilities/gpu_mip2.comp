@@ -1,0 +1,186 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "gpu_shared.h"
+#include "math/color.hlsl"
+
+cbuffer SPDConstants
+{
+    uint mips;
+    uint numWorkGroups;
+    uint2 workGroupOffset;
+};
+
+#define FFX_GPU 1
+#define FFX_HLSL 1
+#define FFX_HLSL_SM 67
+#include "FidelityFX/gpu/ffx_core.h"
+
+#if defined(TYPE_VEC4)
+#define TYPE float4
+#elif defined(TYPE_VEC3)
+#define TYPE float3
+#elif defined(TYPE_VEC2)
+#define TYPE float2
+#else
+#define TYPE float
+#endif
+Texture2D<TYPE> g_InputBuffer;
+RWTexture2D<TYPE> g_OutputBuffers[12];
+
+globallycoherent RWStructuredBuffer<uint> g_SPDCounterBuffer;
+groupshared TYPE lds_SPDIntermediate[16][16];
+groupshared FfxUInt32 lds_SPDCounter;
+
+FfxUInt32 SpdGetAtomicCounter()
+{
+    return lds_SPDCounter;
+}
+
+void SpdIncreaseAtomicCounter(FfxUInt32 slice)
+{
+    InterlockedAdd(g_SPDCounterBuffer[0], 1, lds_SPDCounter);
+}
+
+void SpdResetAtomicCounter(FfxUInt32 slice)
+{
+    g_SPDCounterBuffer[0] = 0;
+}
+
+FfxFloat32x4 SpdLoadIntermediate(FfxUInt32 x, FfxUInt32 y)
+{
+#if defined(TYPE_VEC4)
+    return lds_SPDIntermediate[x][y];
+#elif defined(TYPE_VEC3)
+    float3 ret = lds_SPDIntermediate[x][y];
+    return ret.xyzz;
+#elif defined(TYPE_VEC2)
+    float2 ret = lds_SPDIntermediate[x][y];
+    return ret.xyxy;
+#else
+    float ret = lds_SPDIntermediate[x][y];
+    return ret.xxxx;
+#endif
+}
+
+void SpdStoreIntermediate(FfxUInt32 x, FfxUInt32 y, FfxFloat32x4 value)
+{
+#if defined(TYPE_VEC4)
+    lds_SPDIntermediate[x][y] = value;
+#elif defined(TYPE_VEC3)
+    lds_SPDIntermediate[x][y] = value.xyz;
+#elif defined(TYPE_VEC2)
+    lds_SPDIntermediate[x][y] = value.xy;
+#else
+    lds_SPDIntermediate[x][y] = value.x;
+#endif
+}
+
+FfxFloat32x4 SpdLoadSourceImage(FfxInt32x2 tex, FfxUInt32 slice)
+{
+#if defined(TYPE_VEC4)
+    return g_InputBuffer[tex];
+#elif defined(TYPE_VEC3)
+    float3 ret = g_InputBuffer[tex];
+    return ret.xyzz;
+#elif defined(TYPE_VEC2)
+    float2 ret = g_InputBuffer[tex];
+    return ret.xyxy;
+#else
+    float ret = g_InputBuffer[tex];
+    return ret.xxxx;
+#endif
+}
+
+FfxFloat32x4 SpdLoad(FfxInt32x2 tex, FfxUInt32 slice)
+{
+#ifndef INPUT_LINEAR
+    // Since we are reading from a RWTexture2D then we loose the auto sRGB conversion on read and must do it ourselves
+#   if defined(TYPE_VEC4)
+    TYPE ret = g_OutputBuffers[5][tex];
+    return float4(convertFromSRGB(ret.xyz), ret.w);
+#   elif defined(TYPE_VEC3)
+    return convertFromSRGB(g_OutputBuffers[5][tex].xyz);
+#   endif
+#else
+#   if defined(TYPE_VEC4)
+    return g_OutputBuffers[5][tex];
+#   elif defined(TYPE_VEC3)
+    float3 ret = g_OutputBuffers[5][tex];
+    return ret.xyzz;
+#   elif defined(TYPE_VEC2)
+    float2 ret = g_OutputBuffers[5][tex];
+    return ret.xyxy;
+#   else
+    float ret = g_OutputBuffers[5][tex];
+    return ret.xxxx;
+#   endif
+#endif
+}
+
+void SpdStore(FfxInt32x2 pix, FfxFloat32x4 outValue, FfxUInt32 mip, FfxUInt32 slice)
+{
+#ifndef INPUT_LINEAR
+    // Convert to sRGB
+#   ifdef TYPE_VEC4
+    outValue = float4(convertToSRGB(outValue.xyz), outValue.w);
+#   else
+    outValue = convertToSRGB(outValue);
+#   endif
+#endif
+#if defined(TYPE_VEC4)
+    g_OutputBuffers[mip][pix] = outValue;
+#elif defined(TYPE_VEC3)
+    g_OutputBuffers[mip][pix] = outValue.xyz;
+#elif defined(TYPE_VEC2)
+    g_OutputBuffers[mip][pix] = outValue.xy;
+#else
+    g_OutputBuffers[mip][pix] = outValue.x;
+#endif
+}
+
+FfxFloat32x4 SpdReduce4(FfxFloat32x4 v0, FfxFloat32x4 v1, FfxFloat32x4 v2, FfxFloat32x4 v3)
+{
+#ifndef TYPE_DEPTH
+    #if defined(TYPE_VEC4)
+    return (v0 + v1 + v2 + v3) * 0.25;
+#   elif defined(TYPE_VEC3)
+    return ((v0.xyz + v1.xyz + v2.xyz + v3.xyz) * 0.25).xyzz;
+#   elif defined(TYPE_VEC2)
+    return ((v0.xy + v1.xy + v2.xy + v3.xy) * 0.25).xyxy;
+#   else
+    return ((v0.x + v1.x + v2.x + v3.x) * 0.25).xxxx;
+#   endif
+#elif defined(DEPTH_MIN)
+    return min(min(v0.x, v1.x), min(v2.x, v3.x)).xxxx;
+#else
+    return max(max(v0.x, v1.x), max(v2.x, v3.x)).xxxx;
+#endif
+}
+
+#include "FidelityFX/gpu/spd/ffx_spd.h"
+
+[numthreads(256, 1, 1)]
+void GenerateMips(uint LocalThreadIndex : SV_GroupIndex, uint3 WorkGroupId : SV_GroupID)
+{
+    SpdDownsample(WorkGroupId.xy, LocalThreadIndex, mips, numWorkGroups, WorkGroupId.z, workGroupOffset);
+}

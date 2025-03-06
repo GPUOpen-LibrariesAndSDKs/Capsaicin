@@ -19,9 +19,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
-#include "../../gpu_shared.h"
+#include "gpu_shared.h"
 
-#include "../../math/color.hlsl"
+#include "math/color.hlsl"
 
 #define RADIUS      1
 
@@ -35,15 +35,10 @@ uint2 g_BufferDimensions;
 Texture2D g_DepthBuffer;
 Texture2D g_HistoryBuffer;
 Texture2D g_VelocityBuffer;
+Texture2D<float4> g_ColorInBuffer;
 
 RWTexture2D<float4> g_ColorBuffer;
 RWTexture2D<float4> g_OutputBuffer;
-#ifdef HAS_DIRECT_LIGHTING_BUFFER
-Texture2D           g_DirectLightingBuffer;
-#endif
-#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
-Texture2D           g_GlobalIlluminationBuffer;
-#endif
 
 SamplerState g_LinearSampler;
 SamplerState g_NearestSampler;
@@ -54,7 +49,7 @@ groupshared float3 Tile[TILE_DIM * TILE_DIM];
 float2 GetClosestVelocity(in float2 uv, in float2 texel_size, out bool is_sky_pixel)
 {
     float2 velocity;
-    float  closest_depth = 9.9f;
+    float  closest_depth = -9.9f;
 
     for (int y = -1; y <= 1; ++y)
     {
@@ -63,7 +58,7 @@ float2 GetClosestVelocity(in float2 uv, in float2 texel_size, out bool is_sky_pi
             float2 st    = uv + float2(x, y) * texel_size;
             float  depth = g_DepthBuffer.SampleLevel(g_NearestSampler, st, 0.0f).x;
 
-            if (depth < closest_depth)
+            if (depth > closest_depth)
             {
                 velocity      = g_VelocityBuffer.SampleLevel(g_NearestSampler, st, 0.0f).xy;
                 closest_depth = depth;
@@ -71,7 +66,7 @@ float2 GetClosestVelocity(in float2 uv, in float2 texel_size, out bool is_sky_pi
         }
     }
 
-    is_sky_pixel = (closest_depth >= 1.0f);
+    is_sky_pixel = (closest_depth <= 0.0f);
 
     return velocity;
 }
@@ -108,7 +103,7 @@ float3 ApplySharpening(in float3 center, in float3 top, in float3 left, in float
     result = max(result * (weight + 1.0f) - accum, 0.0f);
     result = squared(result);
 
-    return min(center * result / max(luminance(center), 1e-5f), 1.0f);
+    return saturate(center * result / max(luminance(center), 1e-5f));
 }
 
 // Source: https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1
@@ -193,29 +188,15 @@ void ResolveTemporal(in uint2 globalID : SV_DispatchThreadID, in uint2 localID :
         float2 uv3 = (coord3 + 0.5f) * texel_size;
         float2 uv4 = (coord4 + 0.5f) * texel_size;
 
-        float3 color0 = 0.0f.xxx;
-        float3 color1 = 0.0f.xxx;
-        float3 color2 = 0.0f.xxx;
-        float3 color3 = 0.0f.xxx;
+        float3 color0 = g_ColorInBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;;
+        float3 color1 = g_ColorInBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;;
+        float3 color2 = g_ColorInBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;;
+        float3 color3 = g_ColorInBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;;
 
-#ifdef HAS_DIRECT_LIGHTING_BUFFER
-        color0 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;
-        color1 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;
-        color2 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;
-        color3 += g_DirectLightingBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;
-#endif
-
-#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
-        color0 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv1, 0.0f).xyz;
-        color1 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv2, 0.0f).xyz;
-        color2 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv3, 0.0f).xyz;
-        color3 += g_GlobalIlluminationBuffer.SampleLevel(g_NearestSampler, uv4, 0.0f).xyz;
-#endif
-
-        Tile[localIndex]                               = saturate(color0);
-        Tile[localIndex + TILE_DIM * TILE_DIM / 4]     = saturate(color1);
-        Tile[localIndex + TILE_DIM * TILE_DIM / 2]     = saturate(color2);
-        Tile[localIndex + TILE_DIM * TILE_DIM * 3 / 4] = saturate(color3);
+        Tile[localIndex]                               = saturate(tonemapSimpleReinhard(color0));
+        Tile[localIndex + TILE_DIM * TILE_DIM / 4]     = saturate(tonemapSimpleReinhard(color1));
+        Tile[localIndex + TILE_DIM * TILE_DIM / 2]     = saturate(tonemapSimpleReinhard(color2));
+        Tile[localIndex + TILE_DIM * TILE_DIM * 3 / 4] = saturate(tonemapSimpleReinhard(color3));
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -264,20 +245,6 @@ void ResolveTemporal(in uint2 globalID : SV_DispatchThreadID, in uint2 localID :
 }
 
 [numthreads(8, 8, 1)]
-void ResolvePassthru(in uint2 did : SV_DispatchThreadID)
-{
-    float3 colour = 0.0f.xxx;
-#ifdef HAS_DIRECT_LIGHTING_BUFFER
-    colour += g_DirectLightingBuffer.Load(int3(did, 0)).xyz;
-#endif
-#ifdef HAS_GLOBAL_ILLUMINATION_BUFFER
-    colour += g_GlobalIlluminationBuffer.Load(int3(did, 0)).xyz;
-#endif
-
-    g_ColorBuffer[did] = float4(colour, 1.0f);
-}
-
-[numthreads(8, 8, 1)]
 void UpdateHistory(in uint2 did : SV_DispatchThreadID)
 {
     if (any(did >= g_BufferDimensions))
@@ -288,13 +255,14 @@ void UpdateHistory(in uint2 did : SV_DispatchThreadID)
     float2 texel_size = 1.0f / g_BufferDimensions;
     float2 uv         = (did + 0.5f) * texel_size;
 
-    float3 top        = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2( 0.0f,          texel_size.y), 0.0f).xyz;
-    float3 left       = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2(-texel_size.x,  0.0f        ), 0.0f).xyz;
-    float3 right      = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2( texel_size.x,  0.0f        ), 0.0f).xyz;
-    float3 bottom     = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2( 0.0f,         -texel_size.y), 0.0f).xyz;
+    float3 top    = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2(0.0f, texel_size.y), 0.0f).xyz;
+    float3 left   = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2(-texel_size.x, 0.0f), 0.0f).xyz;
+    float3 right  = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2(texel_size.x, 0.0f), 0.0f).xyz;
+    float3 bottom = g_HistoryBuffer.SampleLevel(g_NearestSampler, uv + float2(0.0f, -texel_size.y), 0.0f).xyz;
 
     float3 center = g_HistoryBuffer.Load(int3(did, 0)).xyz;
-    float3 color  = ApplySharpening(center, top, left, right, bottom);
+    float3 color = ApplySharpening(center, top, left, right, bottom);
+    color = tonemapInverseSimpleReinhard(color);
 
     g_ColorBuffer[did] = float4(color, 1.0f);
     g_OutputBuffer[did] = float4(center, 1.0f);

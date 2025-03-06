@@ -25,11 +25,16 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class TAA : public RenderTechnique
+class TAA final : public RenderTechnique
 {
 public:
     TAA();
-    ~TAA();
+    ~TAA() override;
+
+    TAA(const TAA &other)                = delete;
+    TAA(TAA &&other) noexcept            = delete;
+    TAA &operator=(const TAA &other)     = delete;
+    TAA &operator=(TAA &&other) noexcept = delete;
 
     /*
      * Gets configuration options for current technique.
@@ -45,15 +50,15 @@ public:
     /**
      * Convert render options to internal options format.
      * @param options Current render options.
-     * @returns The options converted.
+     * @return The options converted.
      */
     static RenderOptions convertOptions(RenderOptionList const &options) noexcept;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Initialise any internal data or state.
@@ -88,7 +93,6 @@ protected:
 
     GfxProgram taa_program_;
     GfxKernel  resolve_temporal_kernel_;
-    GfxKernel  resolve_passthru_kernel_;
     GfxKernel  update_history_kernel_;
 };
 } // namespace Capsaicin

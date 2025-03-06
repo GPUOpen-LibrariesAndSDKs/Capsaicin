@@ -1,0 +1,157 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#define FFX_GPU 1
+#define FFX_HLSL 1
+#define FFX_HLSL_SM 67
+#include "FidelityFX/gpu/ffx_core.h"
+
+uint2 g_BufferDimensions;
+
+Texture2D<float4> g_InputBuffer;
+RWTexture2D<float4> g_OutputBuffer;
+
+#ifdef ENABLE_CHROMATIC
+SamplerState g_LinearClampSampler;
+float g_ChromAb;
+#endif
+#ifdef ENABLE_VIGNETTE
+float g_Vignette;
+#endif
+#ifdef ENABLE_FILMGRAIN
+float g_GrainScale;
+float g_GrainAmount;
+uint g_GrainSeed;
+#endif
+
+FfxFloat32 FfxLensSampleR(FfxFloat32x2 fPxPos)
+{
+#ifdef ENABLE_CHROMATIC
+    return g_InputBuffer.SampleLevel(g_LinearClampSampler, fPxPos, 0).r;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxFloat32 FfxLensSampleG(FfxFloat32x2 fPxPos)
+{
+#ifdef ENABLE_CHROMATIC
+    return g_InputBuffer.SampleLevel(g_LinearClampSampler, fPxPos, 0).g;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxFloat32 FfxLensSampleB(FfxFloat32x2 fPxPos)
+{
+#ifdef ENABLE_CHROMATIC
+    return g_InputBuffer.SampleLevel(g_LinearClampSampler, fPxPos, 0).b;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxFloat32 GrainScale()
+{
+#ifdef ENABLE_FILMGRAIN
+    return g_GrainScale;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxFloat32 GrainAmount()
+{
+#ifdef ENABLE_FILMGRAIN
+    return g_GrainAmount;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxUInt32 GrainSeed()
+{
+#ifdef ENABLE_FILMGRAIN
+    return g_GrainSeed;
+#else
+    return 0;
+#endif
+}
+
+FfxUInt32x2 Center()
+{
+    return g_BufferDimensions / 2;
+}
+
+FfxFloat32 Vignette()
+{
+#ifdef ENABLE_VIGNETTE
+    return g_Vignette;
+#else
+    return 0.0f;
+#endif
+}
+
+FfxFloat32 ChromAb()
+{
+#ifdef ENABLE_CHROMATIC
+    return g_ChromAb;
+#else
+    return 0.0f;
+#endif
+}
+
+void StoreLensOutput(FfxInt32x2 iPxPos, FfxFloat32x3 fColor)
+{
+    g_OutputBuffer[iPxPos] = float4(fColor, 1.0f);
+}
+
+#include "FidelityFX/gpu/lens/ffx_lens.h"
+
+[numthreads(64, 1, 1)]
+void main(uint gtid : SV_GroupThreadID, uint2 gid : SV_GroupID)
+{
+    // Do remapping of local xy in workgroup for a more PS-like swizzle pattern
+    FfxUInt32x2 coord = FfxUInt32x2(ffxRemapForWaveReduction(gtid) + FfxUInt32x2(gid.x << 3u, gid.y << 3u));
+
+    if (any(coord >= g_BufferDimensions))
+    {
+        return;
+    }
+
+    FfxUInt32x2 center = g_BufferDimensions / 2;
+
+#ifdef ENABLE_CHROMATIC
+    FfxFloat32x2 RGMag = FfxLensGetRGMag(g_ChromAb);
+    FfxFloat32x3 color = FfxLensSampleWithChromaticAberration(coord, center, RGMag.r, RGMag.g);
+#else
+    FfxFloat32x3 color = g_InputBuffer[coord].xyz;
+#endif
+#ifdef ENABLE_VIGNETTE
+    FfxLensApplyVignette(coord, center, color, g_Vignette);
+#endif
+#ifdef ENABLE_FILMGRAIN
+    FfxLensApplyFilmGrain(coord, color, g_GrainScale, g_GrainAmount, g_GrainSeed);
+#endif
+
+    g_OutputBuffer[coord] = float4(color, 1.0f);
+}

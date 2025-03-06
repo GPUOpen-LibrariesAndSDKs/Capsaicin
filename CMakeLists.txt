@@ -1,16 +1,13 @@
-cmake_minimum_required(VERSION 3.24.0)
+cmake_minimum_required(VERSION 3.25.0)
+cmake_policy(SET CMP0141 NEW)
 
 project(Capsaicin
-    VERSION 1.1.0
+    LANGUAGES CXX
+    VERSION 1.2.0
     DESCRIPTION "AMD experimental real-time rendering framework designed for graphics research and development"
 )
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
-# Set preprocessor definitions
-add_definitions(    
-    /MP
-)
 
 # Disable unused parameters from 3rd party directories
 set(GFX_BUILD_EXAMPLES            OFF CACHE BOOL "")
@@ -21,28 +18,80 @@ set(GFX_ENABLE_SCENE              ON CACHE BOOL "")
 set(GFX_ENABLE_GUI                ON CACHE BOOL "")
 
 # Gather dependencies
+include(FetchContent)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/gfx EXCLUDE_FROM_ALL)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/CLI11 EXCLUDE_FROM_ALL)
+set_target_properties(gfx PROPERTIES FOLDER "third_party")
 set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "" FORCE)
 
-# Organize third party projects
-set_target_properties(uninstall PROPERTIES FOLDER "third_party")
-set_target_properties(gfx PROPERTIES FOLDER "third_party")
-set_target_properties(CLI11 PROPERTIES FOLDER "third_party")
-set_target_properties(tinyobjloader PROPERTIES FOLDER "third_party/gfx_deps")
-set_target_properties(tinyexr PROPERTIES FOLDER "third_party/gfx_deps")
-set_target_properties(ktx PROPERTIES FOLDER "third_party/gfx_deps")
-set_target_properties(astcenc-avx2-static PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-set_target_properties(ktx_read PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-set_target_properties(ktx_version PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-set_target_properties(obj_basisu_cbind PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-set_target_properties(objUtil PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
+FetchContent_Declare(
+    CLI11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG        v2.4.2
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cli11/"
+    FIND_PACKAGE_ARGS 2.0.0 NAMES CLI11
+)
+FetchContent_MakeAvailable(CLI11)
+if(NOT CLI11_FOUND)
+    set_target_properties(CLI11 PROPERTIES FOLDER "third_party")
+endif()
 
-if(TARGET mkvk)
-    set_target_properties(mkvk PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-    set_target_properties(makedfd2vk PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-    set_target_properties(makevk2dfd PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
-    set_target_properties(mkvkformatfiles PROPERTIES FOLDER "third_party/gfx_deps/ktx_deps")
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG        0.8.0
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/yaml-cpp/"
+    FIND_PACKAGE_ARGS 0.7.0 NAMES yaml-cpp
+)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "")
+FetchContent_MakeAvailable(yaml-cpp)
+if(NOT yaml-cpp_FOUND)
+    set_target_properties(yaml-cpp PROPERTIES FOLDER "third_party")
+endif()
+
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann_json/"
+    FIND_PACKAGE_ARGS NAMES nlohmann_json
+)
+FetchContent_MakeAvailable(nlohmann_json)
+if(NOT nlohmann_json_FOUND)
+    set_target_properties(nlohmann_json PROPERTIES FOLDER "third_party")
+endif()
+
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG        v0.22
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshoptimizer/"
+    FIND_PACKAGE_ARGS NAMES meshoptimizer
+)
+FetchContent_MakeAvailable(meshoptimizer)
+if(NOT meshoptimizer_FOUND)
+    set_target_properties(meshoptimizer PROPERTIES FOLDER "third_party")
+    add_library(meshoptimizer::meshoptimizer ALIAS meshoptimizer)
+endif()
+
+option(CAPSAICIN_DOWNLOAD_TEST_MEDIA "Download test media scenes" ON)
+if(CAPSAICIN_DOWNLOAD_TEST_MEDIA)
+    FetchContent_Declare(
+        CapsaicinTestMedia
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/CapsaicinTestMedia.git
+        GIT_TAG        v1.2
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/assets/CapsaicinTestMedia/"
+    )
+    FetchContent_MakeAvailable(CapsaicinTestMedia)
 endif()
 
 # Set project output directory variables.

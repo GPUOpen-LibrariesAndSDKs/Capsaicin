@@ -20,7 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
-#include "../gpu_shared.h"
+#include "gpu_shared.h"
 
 #ifndef TYPE
 #define TYPE float
@@ -29,20 +29,25 @@ THE SOFTWARE.
 #define OP 0
 #endif
 
-#if OP==1
-#define kRS_Descending
-#endif
-#define FFX_HLSL
-#include "../../../../third_party/ffx-parallelsort/FFX_ParallelSort.h"
-// Need to include ffx-parallelsort twice to get 2 different versions (with and without payload)
-namespace Payload
-{
-#define kRS_ValueCopy
-#include "../../../../third_party/ffx-parallelsort/FFX_ParallelSort.h"
-#undef kRS_ValueCopy
-}
+#define FFX_GPU 1
+#define FFX_HLSL 1
+#define FFX_HLSL_SM 67
+#include "FidelityFX/gpu/ffx_core.h"
 
-StructuredBuffer<FFX_ParallelSortCB> CBuffer; // Constant buffer
+struct FfxParallelSortConstants
+{
+    FfxUInt32 numKeys; ///< The number of keys to sort
+    FfxInt32 numBlocksPerThreadGroup; ///< How many blocks of keys each thread group needs to process
+    FfxUInt32 numThreadGroups; ///< How many thread groups are being run concurrently for sort
+    FfxUInt32 numThreadGroupsWithAdditionalBlocks; ///< How many thread groups need to process additional block data
+    FfxUInt32 numReduceThreadgroupPerBin; ///< How many thread groups are summed together for each reduced bin entry
+    FfxUInt32 numScanValues; ///< How many values to perform scan prefix (+ add) on
+    FfxUInt32 shift; ///< What bits are being sorted (4 bit increments)
+    FfxUInt32 padding; ///< Padding - unused
+
+};
+
+StructuredBuffer<FfxParallelSortConstants> CBuffer; // Constant buffer
 uint CShiftBit;
 
 RWStructuredBuffer<uint> SrcBuffer; // The unsorted keys or scan data
@@ -59,36 +64,148 @@ RWStructuredBuffer<uint> ScanDst; // Destination for Scan Data
 RWStructuredBuffer<uint> ScanScratch; // Scratch data for Scan
 
 StructuredBuffer<uint> numKeys; // Number of keys to sort for indirect execution
-RWStructuredBuffer<FFX_ParallelSortCB> CBufferUAV; // UAV for constant buffer parameters for indirect execution
+RWStructuredBuffer<FfxParallelSortConstants> CBufferUAV; // UAV for constant buffer parameters for indirect execution
 RWStructuredBuffer<uint> CountScatterArgs; // Count and Scatter Args for indirect execution
 RWStructuredBuffer<uint> ReduceScanArgs; // Reduce and Scan Args for indirect execution
+
+
+FfxUInt32 FfxNumBlocksPerThreadGroup()
+{
+    return CBuffer[0].numBlocksPerThreadGroup;
+}
+
+FfxUInt32 FfxNumThreadGroups()
+{
+    return CBuffer[0].numThreadGroups;
+}
+
+FfxUInt32 FfxNumThreadGroupsWithAdditionalBlocks()
+{
+    return CBuffer[0].numThreadGroupsWithAdditionalBlocks;
+}
+
+FfxUInt32 FfxNumReduceThreadgroupPerBin()
+{
+    return CBuffer[0].numReduceThreadgroupPerBin;
+}
+
+FfxUInt32 FfxNumKeys()
+{
+    return CBuffer[0].numKeys;
+}
+
+FfxUInt32 FfxLoadKey(FfxUInt32 index)
+{
+    return SrcBuffer[index];
+}
+
+void FfxStoreKey(FfxUInt32 index, FfxUInt32 value)
+{
+    DstBuffer[index] = value;
+}
+
+FfxUInt32 FfxLoadPayload(FfxUInt32 index)
+{
+    return SrcPayload[index];
+}
+
+void FfxStorePayload(FfxUInt32 index, FfxUInt32 value)
+{
+    DstPayload[index] = value;
+}
+
+FfxUInt32 FfxLoadSum(FfxUInt32 index)
+{
+    return SumTable[index];
+}
+
+void FfxStoreSum(FfxUInt32 index, FfxUInt32 value)
+{
+    SumTable[index] = value;
+}
+
+void FfxStoreReduce(FfxUInt32 index, FfxUInt32 value)
+{
+    ReduceTable[index] = value;
+}
+
+FfxUInt32 FfxLoadScanSource(FfxUInt32 index)
+{
+    return ScanSrc[index];
+}
+
+void FfxStoreScanDest(FfxUInt32 index, FfxUInt32 value)
+{
+    ScanDst[index] = value;
+}
+
+FfxUInt32 FfxLoadScanScratch(FfxUInt32 index)
+{
+    return ScanScratch[index];
+}
+
+#if OP==1
+#define FFX_PARALLELSORT_SORT_DESCENDING
+#endif
+#include "FidelityFX/gpu/parallelsort/ffx_parallelsort.h"
+// Need to include ffx-parallelsort twice to get 2 different versions (with and without payload)
+namespace Payload
+{
+#define FFX_PARALLELSORT_COPY_VALUE
+#include "FidelityFX/gpu/parallelsort/ffx_parallelsort.h"
+#undef FFX_PARALLELSORT_COPY_VALUE
+}
 
 [numthreads(1, 1, 1)]
 void setupIndirectParameters(uint localID : SV_GroupThreadID)
 {
-    FFX_ParallelSort_SetupIndirectParams(numKeys[0], 800, CBufferUAV, CountScatterArgs, ReduceScanArgs);
+    CBufferUAV[0].numKeys = numKeys[0];
+    uint BlockSize = FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE;
+    uint NumBlocks = (numKeys[0] + BlockSize - 1) / BlockSize;
+    // Figure out data distribution
+    uint NumThreadGroupsToRun = 800;
+    uint BlocksPerThreadGroup = (NumBlocks / NumThreadGroupsToRun);
+    CBufferUAV[0].numThreadGroupsWithAdditionalBlocks = NumBlocks % NumThreadGroupsToRun;
+    if (NumBlocks < NumThreadGroupsToRun)
+    {
+        BlocksPerThreadGroup = 1;
+        NumThreadGroupsToRun = NumBlocks;
+        CBufferUAV[0].numThreadGroupsWithAdditionalBlocks = 0;
+    }
+    CBufferUAV[0].numThreadGroups = NumThreadGroupsToRun;
+    CBufferUAV[0].numBlocksPerThreadGroup = BlocksPerThreadGroup;
+    // Calculate the number of thread groups to run for reduction (each thread group can process BlockSize number of entries)
+    uint NumReducedThreadGroupsToRun = FFX_PARALLELSORT_SORT_BIN_COUNT * ((BlockSize > NumThreadGroupsToRun) ? 1 : (NumThreadGroupsToRun + BlockSize - 1) / BlockSize);
+    CBufferUAV[0].numReduceThreadgroupPerBin = NumReducedThreadGroupsToRun / FFX_PARALLELSORT_SORT_BIN_COUNT;
+    CBufferUAV[0].numScanValues = NumReducedThreadGroupsToRun; // The number of reduce thread groups becomes our scan count (as each thread group writes out 1 value that needs scan prefix)
+    // Setup dispatch arguments
+    CountScatterArgs[0] = NumThreadGroupsToRun;
+    CountScatterArgs[1] = 1;
+    CountScatterArgs[2] = 1;
+    ReduceScanArgs[0] = NumReducedThreadGroupsToRun;
+    ReduceScanArgs[1] = 1;
+    ReduceScanArgs[2] = 1;
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void count(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
     // Call the uint version of the count part of the algorithm
-    FFX_ParallelSort_Count_uint(localID, groupID, CBuffer[0], CShiftBit, SrcBuffer, SumTable);
+    ffxParallelSortCountUInt(localID, groupID, CShiftBit);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void countReduce(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
     // Call the reduce part of the algorithm
-    FFX_ParallelSort_ReduceCount(localID, groupID, CBuffer[0], SumTable, ReduceTable);
+    ffxParallelSortReduceCount(localID, groupID);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void scan(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
     uint BaseIndex = FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE * groupID;
-    FFX_ParallelSort_ScanPrefix(CBuffer[0].NumScanValues, localID, groupID, 0, BaseIndex, false,
-                                CBuffer[0], ScanSrc, ScanDst, ScanScratch);
+    ffxParallelSortScanPrefix(CBuffer[0].numScanValues, localID, groupID, 0, BaseIndex, false);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
@@ -98,31 +215,23 @@ void scanAdd(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
     // has a more specialized access pattern to match optimized count
     // Access needs to be done similarly to reduce
     // Figure out what bin data we are reducing
-    uint BinID = groupID / CBuffer[0].NumReduceThreadgroupPerBin;
-    uint BinOffset = BinID * CBuffer[0].NumThreadGroups;
+    uint BinID = groupID / CBuffer[0].numReduceThreadgroupPerBin;
+    uint BinOffset = BinID * CBuffer[0].numThreadGroups;
 
     // Get the base index for this thread group
-    uint BaseIndex = (groupID % CBuffer[0].NumReduceThreadgroupPerBin) * FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE;
+    uint BaseIndex = (groupID % CBuffer[0].numReduceThreadgroupPerBin) * FFX_PARALLELSORT_ELEMENTS_PER_THREAD * FFX_PARALLELSORT_THREADGROUP_SIZE;
 
-    FFX_ParallelSort_ScanPrefix(CBuffer[0].NumThreadGroups, localID, groupID, BinOffset, BaseIndex, true,
-                                CBuffer[0], ScanSrc, ScanDst, ScanScratch);
+    ffxParallelSortScanPrefix(CBuffer[0].numThreadGroups, localID, groupID, BinOffset, BaseIndex, true);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void scatter(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-    FFX_ParallelSort_Scatter_uint(localID, groupID, CBuffer[0], CShiftBit, SrcBuffer, DstBuffer, SumTable);
+    ffxParallelSortScatterUInt(localID, groupID, CShiftBit);
 }
 
 [numthreads(FFX_PARALLELSORT_THREADGROUP_SIZE, 1, 1)]
 void scatterPayload(uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-    Payload::FFX_ParallelSortCB PayloadCBuffer;
-    PayloadCBuffer.NumKeys = CBuffer[0].NumKeys;
-    PayloadCBuffer.NumBlocksPerThreadGroup = CBuffer[0].NumBlocksPerThreadGroup;
-    PayloadCBuffer.NumThreadGroups = CBuffer[0].NumThreadGroups;
-    PayloadCBuffer.NumThreadGroupsWithAdditionalBlocks = CBuffer[0].NumThreadGroupsWithAdditionalBlocks;
-    PayloadCBuffer.NumReduceThreadgroupPerBin = CBuffer[0].NumReduceThreadgroupPerBin;
-    PayloadCBuffer.NumScanValues = CBuffer[0].NumScanValues;
-    Payload::FFX_ParallelSort_Scatter_uint(localID, groupID, PayloadCBuffer, CShiftBit, SrcBuffer, DstBuffer, SumTable, SrcPayload, DstPayload);
+    Payload::ffxParallelSortScatterUInt(localID, groupID, CShiftBit);
 }

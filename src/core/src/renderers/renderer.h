@@ -21,6 +21,7 @@ THE SOFTWARE.
 ********************************************************************/
 #pragma once
 
+#include "capsaicin_internal_types.h"
 #include "factory.h"
 #include "render_technique.h"
 
@@ -28,14 +29,18 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-/** A abstract renderer class used to encapsulate all required operations to setup a rendering work flow. */
+/** An abstract renderer class used to encapsulate all required operations to set up a rendering work flow. */
 class Renderer
 {
-    Renderer(Renderer const &)            = delete;
-    Renderer &operator=(Renderer const &) = delete;
-
 public:
     Renderer() noexcept = default;
+
+    virtual ~Renderer() noexcept = default;
+
+    Renderer(Renderer const &other)                = delete;
+    Renderer(Renderer &&other) noexcept            = delete;
+    Renderer &operator=(Renderer const &other)     = delete;
+    Renderer &operator=(Renderer &&other) noexcept = delete;
 
     /**
      * Sets up the required render techniques.
@@ -45,6 +50,14 @@ public:
      */
     virtual std::vector<std::unique_ptr<RenderTechnique>> setupRenderTechniques(
         RenderOptionList const &renderOptions) noexcept = 0;
+
+    /*
+     * Gets any override render options for current renderer.
+     * @note This is automatically called by the framework after setupRenderTechniques is called and should be
+     * used to initialise any render options specific to the current renderer.
+     * @return A list of all valid configuration options.
+     */
+    virtual RenderOptionList getRenderOptions() noexcept;
 };
 
 class RendererFactory : public Factory<Renderer>

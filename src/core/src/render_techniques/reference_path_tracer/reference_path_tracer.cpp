@@ -23,17 +23,18 @@ THE SOFTWARE.
 #include "reference_path_tracer.h"
 
 #include "capsaicin_internal.h"
+#include "components/light_builder/light_builder.h"
 #include "components/light_sampler/light_sampler_switcher.h"
 #include "components/stratified_sampler/stratified_sampler.h"
 
-char const *kReferencePTRaygenShaderName       = "ReferencePTRaygen";
-char const *kReferencePTMissShaderName         = "ReferencePTMiss";
-char const *kReferencePTShadowMissShaderName   = "ReferencePTShadowMiss";
-char const *kReferencePTAnyHitShaderName       = "ReferencePTAnyHit";
-char const *kReferencePTShadowAnyHitShaderName = "ReferencePTShadowAnyHit";
-char const *kReferencePTClosestHitShaderName   = "ReferencePTClosestHit";
-char const *kReferencePTHitGroupName           = "ReferencePTHitGroup";
-char const *kReferencePTShadowHitGroupName     = "ReferencePTShadowHitGroup";
+auto const *kReferencePTRaygenShaderName       = "ReferencePTRaygen";
+auto const *kReferencePTMissShaderName         = "ReferencePTMiss";
+auto const *kReferencePTShadowMissShaderName   = "ReferencePTShadowMiss";
+auto const *kReferencePTAnyHitShaderName       = "ReferencePTAnyHit";
+auto const *kReferencePTShadowAnyHitShaderName = "ReferencePTShadowAnyHit";
+auto const *kReferencePTClosestHitShaderName   = "ReferencePTClosestHit";
+auto const *kReferencePTHitGroupName           = "ReferencePTHitGroup";
+auto const *kReferencePTShadowHitGroupName     = "ReferencePTShadowHitGroup";
 
 namespace Capsaicin
 {
@@ -43,7 +44,7 @@ ReferencePT::ReferencePT()
 
 ReferencePT::~ReferencePT()
 {
-    terminate();
+    ReferencePT::terminate();
 }
 
 RenderOptionList ReferencePT::getRenderOptions() noexcept
@@ -55,10 +56,11 @@ RenderOptionList ReferencePT::getRenderOptions() noexcept
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_disable_albedo_materials, options));
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_disable_direct_lighting, options));
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_disable_specular_materials, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_disable_alpha_testing, options));
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_nee_only, options));
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_disable_nee, options));
-    newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_nee_reservoir_resampling, options));
     newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_use_dxr10, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(reference_pt_accumulate, options));
     return newOptions;
 }
 
@@ -71,10 +73,11 @@ ReferencePT::RenderOptions ReferencePT::convertOptions(RenderOptionList const &o
     RENDER_OPTION_GET(reference_pt_disable_albedo_materials, newOptions, options)
     RENDER_OPTION_GET(reference_pt_disable_direct_lighting, newOptions, options)
     RENDER_OPTION_GET(reference_pt_disable_specular_materials, newOptions, options)
+    RENDER_OPTION_GET(reference_pt_disable_alpha_testing, newOptions, options)
     RENDER_OPTION_GET(reference_pt_nee_only, newOptions, options)
     RENDER_OPTION_GET(reference_pt_disable_nee, newOptions, options)
-    RENDER_OPTION_GET(reference_pt_nee_reservoir_resampling, newOptions, options)
     RENDER_OPTION_GET(reference_pt_use_dxr10, newOptions, options)
+    RENDER_OPTION_GET(reference_pt_accumulate, newOptions, options)
     return newOptions;
 }
 
@@ -86,53 +89,54 @@ ComponentList ReferencePT::getComponents() const noexcept
     return components;
 }
 
-AOVList ReferencePT::getAOVs() const noexcept
+SharedTextureList ReferencePT::getSharedTextures() const noexcept
 {
-    AOVList aovs;
-    aovs.push_back({"Color", AOV::Write});
-    return aovs;
+    SharedTextureList textures;
+    textures.push_back({"Color", SharedTexture::Access::Write});
+    return textures;
 }
 
 bool ReferencePT::init(CapsaicinInternal const &capsaicin) noexcept
 {
     rayCameraData = gfxCreateBuffer<RayCamera>(gfx_, 1, nullptr, kGfxCpuAccess_Write);
     rayCameraData.setName("Capsaicin_PT_RayCamera");
-    accumulationBuffer = gfxCreateTexture2D(gfx_, DXGI_FORMAT_R32G32B32A32_FLOAT);
-    accumulationBuffer.setName("Capsaicin_PT_AccumulationBuffer");
+    accumulationBuffer =
+        capsaicin.createRenderTexture(DXGI_FORMAT_R32G32B32A32_FLOAT, "PT_AccumulationBuffer");
 
-    reference_pt_program_ = gfxCreateProgram(gfx_, getProgramName(), capsaicin.getShaderPath());
+    reference_pt_program_ = capsaicin.createProgram(getProgramName());
     return initKernels(capsaicin);
 }
 
 void ReferencePT::render(CapsaicinInternal &capsaicin) noexcept
 {
-    RenderOptions newOptions         = convertOptions(capsaicin.getOptions());
-    auto          lightSampler       = capsaicin.getComponent<LightSamplerSwitcher>();
-    auto          stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
+    RenderOptions const newOptions         = convertOptions(capsaicin.getOptions());
+    auto const          lightSampler       = capsaicin.getComponent<LightSamplerSwitcher>();
+    auto const          lightBuilder       = capsaicin.getComponent<LightBuilder>();
+    auto const          stratified_sampler = capsaicin.getComponent<StratifiedSampler>();
 
     // Check if options change requires kernel recompile
-    bool recompile = needsRecompile(capsaicin, newOptions);
+    bool const recompile = needsRecompile(capsaicin, newOptions);
 
     // Check if we can continue to accumulate samples
-    bool const accumulate = !recompile && bufferDimensions.x == capsaicin.getWidth()
-                         && bufferDimensions.y == capsaicin.getHeight()
-                         && checkCameraUpdated(capsaicin.getCamera())
+    auto const renderDimensions = capsaicin.getRenderDimensions();
+    bool const accumulate = options.reference_pt_accumulate && !recompile && !capsaicin.getAnimationUpdated()
+                         && !capsaicin.getRenderDimensionsUpdated() && !capsaicin.getCameraUpdated()
                          && options.reference_pt_bounce_count == newOptions.reference_pt_bounce_count
                          && options.reference_pt_min_rr_bounces == newOptions.reference_pt_min_rr_bounces
                          && !capsaicin.getMeshesUpdated() && !capsaicin.getTransformsUpdated()
-                         && !lightSampler->getLightsUpdated(capsaicin)
-                         && !capsaicin.getEnvironmentMapUpdated() && capsaicin.getFrameIndex() > 0;
+                         && !lightBuilder->getLightsUpdated()
+                         && !lightSampler->getLightSettingsUpdated(capsaicin)
+                         && capsaicin.getFrameIndex() > 0;
 
     // Update the history
-    bufferDimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
-    camera           = capsaicin.getCamera();
-    options          = newOptions;
+    options = newOptions;
 
     if (!accumulate)
     {
-        cameraData = caclulateRayCamera(
+        auto const camera = capsaicin.getCamera();
+        cameraData        = caclulateRayCamera(
             {camera.eye, camera.center, camera.up, camera.aspect, camera.fovY, camera.nearZ, camera.farZ},
-                capsaicin.getWidth(), capsaicin.getHeight());
+            renderDimensions);
     }
 
     if (recompile)
@@ -142,7 +146,13 @@ void ReferencePT::render(CapsaicinInternal &capsaicin) noexcept
         initKernels(capsaicin);
     }
 
+    if (capsaicin.getRenderDimensionsUpdated())
+    {
+        accumulationBuffer = capsaicin.resizeRenderTexture(accumulationBuffer, false);
+    }
+
     // Bind the shader parameters
+    uint2 const bufferDimensions = capsaicin.getRenderDimensions();
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_BufferDimensions", bufferDimensions);
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_FrameIndex", capsaicin.getFrameIndex());
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_RayCamera", cameraData);
@@ -155,21 +165,23 @@ void ReferencePT::render(CapsaicinInternal &capsaicin) noexcept
     stratified_sampler->addProgramParameters(capsaicin, reference_pt_program_);
 
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_InstanceBuffer", capsaicin.getInstanceBuffer());
-    gfxProgramSetParameter(gfx_, reference_pt_program_, "g_MeshBuffer", capsaicin.getMeshBuffer());
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_TransformBuffer", capsaicin.getTransformBuffer());
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_IndexBuffer", capsaicin.getIndexBuffer());
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_VertexBuffer", capsaicin.getVertexBuffer());
+    gfxProgramSetParameter(gfx_, reference_pt_program_, "g_VertexDataIndex", capsaicin.getVertexDataIndex());
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_MaterialBuffer", capsaicin.getMaterialBuffer());
 
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_AccumulationBuffer", accumulationBuffer);
-    gfxProgramSetParameter(gfx_, reference_pt_program_, "g_OutputBuffer", capsaicin.getAOVBuffer("Color"));
+    gfxProgramSetParameter(
+        gfx_, reference_pt_program_, "g_OutputBuffer", capsaicin.getSharedTexture("Color"));
 
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_Scene", capsaicin.getAccelerationStructure());
 
     gfxProgramSetParameter(
         gfx_, reference_pt_program_, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
-    gfxProgramSetParameter(
-        gfx_, reference_pt_program_, "g_TextureMaps", capsaicin.getTextures(), capsaicin.getTextureCount());
+    auto const &textures = capsaicin.getTextures();
+    gfxProgramSetParameter(gfx_, reference_pt_program_, "g_TextureMaps", textures.data(),
+        static_cast<uint32_t>(textures.size()));
 
     gfxProgramSetParameter(gfx_, reference_pt_program_, "g_TextureSampler", capsaicin.getLinearWrapSampler());
 
@@ -213,11 +225,12 @@ void ReferencePT::terminate() noexcept
 void ReferencePT::renderGUI(CapsaicinInternal &capsaicin) const noexcept
 {
     ImGui::DragInt("Samples Per Pixel",
-        (int32_t *)&capsaicin.getOption<uint32_t>("reference_pt_sample_count"), 1, 1, 30);
+        reinterpret_cast<int32_t *>(&capsaicin.getOption<uint32_t>("reference_pt_sample_count")), 1, 1, 30);
     auto &bounces = capsaicin.getOption<uint32_t>("reference_pt_bounce_count");
-    ImGui::DragInt("Bounces", (int32_t *)&bounces, 1, 0, 30);
+    ImGui::DragInt("Bounces", reinterpret_cast<int32_t *>(&bounces), 1, 0, 30);
     auto &minBounces = capsaicin.getOption<uint32_t>("reference_pt_min_rr_bounces");
-    ImGui::DragInt("Min Bounces", (int32_t *)&minBounces, 1, 0, bounces);
+    ImGui::DragInt(
+        "Min Bounces", reinterpret_cast<int32_t *>(&minBounces), 1, 0, static_cast<int32_t>(bounces));
     minBounces = glm::min(minBounces, bounces);
     ImGui::Checkbox(
         "Disable Albedo Textures", &capsaicin.getOption<bool>("reference_pt_disable_albedo_materials"));
@@ -227,15 +240,19 @@ void ReferencePT::renderGUI(CapsaicinInternal &capsaicin) const noexcept
     ImGui::Checkbox("Disable NEE", &capsaicin.getOption<bool>("reference_pt_disable_nee"));
     ImGui::Checkbox(
         "Disable Specular Materials", &capsaicin.getOption<bool>("reference_pt_disable_specular_materials"));
+    ImGui::Checkbox(
+        "Disable Alpha Testing", &capsaicin.getOption<bool>("reference_pt_disable_alpha_testing"));
+    ImGui::Checkbox("Enable Accumulation", &capsaicin.getOption<bool>("reference_pt_accumulate"));
 }
 
 bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
 {
     // Set up the base defines based on available features
-    auto                      lightSampler = capsaicin.getComponent<LightSamplerSwitcher>();
-    std::vector<std::string>  baseDefines(std::move(lightSampler->getShaderDefines(capsaicin)));
+    auto const                lightSampler = capsaicin.getComponent<LightSamplerSwitcher>();
+    std::vector const         baseDefines(lightSampler->getShaderDefines(capsaicin));
     std::vector<char const *> defines;
-    for (auto &i : baseDefines)
+    defines.reserve(baseDefines.size());
+    for (auto const &i : baseDefines)
     {
         defines.push_back(i.c_str());
     }
@@ -251,6 +268,10 @@ bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
     {
         defines.push_back("DISABLE_SPECULAR_MATERIALS");
     }
+    if (options.reference_pt_disable_alpha_testing)
+    {
+        defines.push_back("DISABLE_ALPHA_TESTING");
+    }
     if (options.reference_pt_nee_only)
     {
         defines.push_back("DISABLE_NON_NEE");
@@ -258,10 +279,6 @@ bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
     if (options.reference_pt_disable_nee)
     {
         defines.push_back("DISABLE_NEE");
-    }
-    if (options.reference_pt_nee_reservoir_resampling)
-    {
-        defines.push_back("ENABLE_NEE_RESERVOIR_SAMPLING");
     }
     if (options.reference_pt_use_dxr10)
     {
@@ -276,19 +293,22 @@ bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
         {
             defines.push_back(i.c_str());
         }
+        exports.reserve(exports_str.size());
         for (auto &i : exports_str)
         {
             exports.push_back(i.c_str());
         }
+        subobjects.reserve(subobjects_str.size());
         for (auto &i : subobjects_str)
         {
             subobjects.push_back(i.c_str());
         }
 
-        reference_pt_kernel_ =
-            gfxCreateRaytracingKernel(gfx_, reference_pt_program_, local_root_signature_associations.data(),
-                (uint32_t)local_root_signature_associations.size(), exports.data(), (uint32_t)exports.size(),
-                subobjects.data(), (uint32_t)subobjects.size(), defines.data(), (uint32_t)defines.size());
+        reference_pt_kernel_ = gfxCreateRaytracingKernel(gfx_, reference_pt_program_,
+            local_root_signature_associations.data(),
+            static_cast<uint32_t>(local_root_signature_associations.size()), exports.data(),
+            static_cast<uint32_t>(exports.size()), subobjects.data(),
+            static_cast<uint32_t>(subobjects.size()), defines.data(), static_cast<uint32_t>(defines.size()));
 
         uint32_t entry_count[kGfxShaderGroupType_Count] {
             capsaicin.getSbtStrideInEntries(kGfxShaderGroupType_Raygen),
@@ -303,40 +323,33 @@ bool ReferencePT::initKernels(CapsaicinInternal const &capsaicin) noexcept
     }
     else
     {
-        reference_pt_kernel_ = gfxCreateComputeKernel(
-            gfx_, reference_pt_program_, "ReferencePT", defines.data(), (uint32_t)defines.size());
-        reference_pt_sbt_ = {};
+        reference_pt_kernel_ = gfxCreateComputeKernel(gfx_, reference_pt_program_, "ReferencePT",
+            defines.data(), static_cast<uint32_t>(defines.size()));
+        reference_pt_sbt_    = {};
     }
     return !!reference_pt_program_;
 }
 
-bool ReferencePT::checkCameraUpdated(GfxCamera const &currentCamera) noexcept
+bool ReferencePT::needsRecompile(
+    CapsaicinInternal const &capsaicin, RenderOptions const &newOptions) const noexcept
 {
-    return camera.aspect == currentCamera.aspect && camera.center == currentCamera.center
-        && camera.eye == currentCamera.eye && camera.farZ == currentCamera.farZ
-        && camera.fovY == currentCamera.fovY && camera.nearZ == currentCamera.nearZ
-        && camera.type == currentCamera.type && camera.up == currentCamera.up;
-}
-
-bool ReferencePT::needsRecompile(CapsaicinInternal &capsaicin, RenderOptions const &newOptions) noexcept
-{
-    auto lightSampler = capsaicin.getComponent<LightSamplerSwitcher>();
+    auto const lightSampler = capsaicin.getComponent<LightSamplerSwitcher>();
 
     // Check if options change requires kernel recompile
-    bool recompile =
+    bool const recompile =
         lightSampler->needsRecompile(capsaicin)
         || options.reference_pt_disable_albedo_materials != newOptions.reference_pt_disable_albedo_materials
         || options.reference_pt_disable_direct_lighting != newOptions.reference_pt_disable_direct_lighting
         || options.reference_pt_disable_specular_materials
                != newOptions.reference_pt_disable_specular_materials
+        || options.reference_pt_disable_alpha_testing != newOptions.reference_pt_disable_alpha_testing
         || options.reference_pt_nee_only != newOptions.reference_pt_nee_only
         || options.reference_pt_disable_nee != newOptions.reference_pt_disable_nee
-        || options.reference_pt_nee_reservoir_resampling != newOptions.reference_pt_nee_reservoir_resampling
         || options.reference_pt_use_dxr10 != newOptions.reference_pt_use_dxr10;
     return recompile;
 }
 
-void ReferencePT::setupSbt(CapsaicinInternal &capsaicin) noexcept
+void ReferencePT::setupSbt(CapsaicinInternal const &capsaicin) const noexcept
 {
     // Populate shader binding table
     gfxSbtSetShaderGroup(
@@ -344,9 +357,8 @@ void ReferencePT::setupSbt(CapsaicinInternal &capsaicin) noexcept
     gfxSbtSetShaderGroup(gfx_, reference_pt_sbt_, kGfxShaderGroupType_Miss, 0, kReferencePTMissShaderName);
     gfxSbtSetShaderGroup(
         gfx_, reference_pt_sbt_, kGfxShaderGroupType_Miss, 1, kReferencePTShadowMissShaderName);
-    for (uint32_t i = 0;
-         i < gfxAccelerationStructureGetRaytracingPrimitiveCount(gfx_, capsaicin.getAccelerationStructure());
-         i++)
+
+    for (uint32_t i = 0; i < capsaicin.getRaytracingPrimitiveCount(); i++)
     {
         gfxSbtSetShaderGroup(gfx_, reference_pt_sbt_, kGfxShaderGroupType_Hit,
             i * capsaicin.getSbtStrideInEntries(kGfxShaderGroupType_Hit) + 0, kReferencePTHitGroupName);
@@ -356,21 +368,21 @@ void ReferencePT::setupSbt(CapsaicinInternal &capsaicin) noexcept
 }
 
 void ReferencePT::setupPTKernel([[maybe_unused]] CapsaicinInternal const &capsaicin,
-    [[maybe_unused]] std::vector<GfxLocalRootSignatureAssociation> &local_root_signature_associations,
+    [[maybe_unused]] std::vector<GfxLocalRootSignatureAssociation>       &local_root_signature_associations,
     [[maybe_unused]] std::vector<std::string> &defines, std::vector<std::string> &exports,
     std::vector<std::string> &subobjects) noexcept
 {
-    exports.push_back(kReferencePTRaygenShaderName);
-    exports.push_back(kReferencePTMissShaderName);
-    exports.push_back(kReferencePTShadowMissShaderName);
-    exports.push_back(kReferencePTAnyHitShaderName);
-    exports.push_back(kReferencePTShadowAnyHitShaderName);
-    exports.push_back(kReferencePTClosestHitShaderName);
+    exports.emplace_back(kReferencePTRaygenShaderName);
+    exports.emplace_back(kReferencePTMissShaderName);
+    exports.emplace_back(kReferencePTShadowMissShaderName);
+    exports.emplace_back(kReferencePTAnyHitShaderName);
+    exports.emplace_back(kReferencePTShadowAnyHitShaderName);
+    exports.emplace_back(kReferencePTClosestHitShaderName);
 
-    subobjects.push_back("MyShaderConfig");
-    subobjects.push_back("MyPipelineConfig");
-    subobjects.push_back(kReferencePTHitGroupName);
-    subobjects.push_back(kReferencePTShadowHitGroupName);
+    subobjects.emplace_back("MyShaderConfig");
+    subobjects.emplace_back("MyPipelineConfig");
+    subobjects.emplace_back(kReferencePTHitGroupName);
+    subobjects.emplace_back(kReferencePTShadowHitGroupName);
 }
 
 char const *ReferencePT::getProgramName() noexcept

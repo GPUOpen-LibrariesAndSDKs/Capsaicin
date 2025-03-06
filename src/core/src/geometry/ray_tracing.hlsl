@@ -23,6 +23,9 @@ THE SOFTWARE.
 #ifndef RAY_TRACING_HLSL
 #define RAY_TRACING_HLSL
 
+#define HIT_DISTANCE_MAX  6.5504e+4f
+#define HIT_DISTANCE_MISS HIT_DISTANCE_MAX
+
 struct HitInfo
 {
     uint instanceIndex;

@@ -3,4 +3,6 @@ build
 imgui.ini
 .vscode
 .vs
-out
+out/
+cache/
+shader_cache/

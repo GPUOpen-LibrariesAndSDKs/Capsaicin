@@ -43,7 +43,7 @@ float balanceHeuristic(float fPDF, float gPDF)
  */
 float balanceHeuristic(float fPDF, float gPDF, float hPDF)
 {
-    return fPDF / (fPDF + gPDF + gPDF);
+    return fPDF / (fPDF + gPDF + hPDF);
 }
 
 /**

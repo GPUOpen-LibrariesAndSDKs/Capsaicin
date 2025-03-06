@@ -22,22 +22,34 @@ THE SOFTWARE.
 
 float3   g_Eye;
 uint2    g_BufferDimensions;
+float4x4 g_ReprojectionMatrix;
 float4x4 g_ViewProjectionInverse;
 
 TextureCube g_EnvironmentBuffer;
 
 SamplerState g_LinearSampler;
 
-#include "../../math/transform.hlsl"
+#include "math/transform.hlsl"
 
-float4 main(in float4 pos : SV_Position) : SV_Target
+struct Pixel
+{
+    float4 color    : SV_Target0;
+    float2 velocity : SV_Target1;
+};
+
+Pixel main(in float4 pos : SV_Position)
 {
     float2 uv  = pos.xy / g_BufferDimensions;
     float2 ndc = 2.0f * float2(uv.x, 1.0f - uv.y) - 1.0f;
 
-    float3 world = transformPointProjection(float3(ndc, 1.0f), g_ViewProjectionInverse);
+    float3 world        = transformPointProjection(float3(ndc, 0.0f), g_ViewProjectionInverse);
+    float3 previous_ndc = transformPointProjection(float3(ndc, 0.0f), g_ReprojectionMatrix);
 
     float3 sky_sample = g_EnvironmentBuffer.Sample(g_LinearSampler, world - g_Eye).xyz;
 
-    return float4(sky_sample, 1.0f);
+    Pixel pixel;
+    pixel.color    = float4(sky_sample, 1.0f);
+    pixel.velocity = uv - (0.5f * float2(previous_ndc.x, -previous_ndc.y) + 0.5f);
+
+    return pixel;
 }

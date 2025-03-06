@@ -27,7 +27,7 @@ Texture2D g_EnvironmentMap;
 
 SamplerState g_LinearSampler;
 
-#include "../math/sampling.hlsl"
+#include "math/sampling.hlsl"
 
 float2 SampleSphericalMap(in float3 rd)
 {

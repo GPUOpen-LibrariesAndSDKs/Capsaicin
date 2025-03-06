@@ -20,32 +20,27 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
-#include "../../geometry/path_tracing_shared.h"
+#include "visibility_buffer_shared.h"
+#include "geometry/path_tracing_shared.h"
 
-uint2 g_BufferDimensions;
+StructuredBuffer<DrawConstantsRT> g_VBConstants;
 RayCamera g_RayCamera;
-uint g_FrameIndex;
+
+uint g_FrameIndex; // Needed for alpha test
 
 StructuredBuffer<Instance> g_InstanceBuffer;
-StructuredBuffer<Mesh> g_MeshBuffer;
 StructuredBuffer<float3x4> g_TransformBuffer;
 StructuredBuffer<uint> g_IndexBuffer;
 StructuredBuffer<Vertex> g_VertexBuffer;
+uint g_VertexDataIndex;
+uint g_PrevVertexDataIndex;
 StructuredBuffer<Material> g_MaterialBuffer;
-StructuredBuffer<float3x4> g_PrevTransformBuffer;
+StructuredBuffer<float3x4> g_PreviousTransformBuffer;
 
 RaytracingAccelerationStructure g_Scene;
 
 Texture2D g_TextureMaps[];
 SamplerState g_TextureSampler; // Should be a linear sampler
-
-struct CameraMatrix
-{
-    float4x4 data;
-};
-ConstantBuffer<CameraMatrix> g_ViewProjection;
-ConstantBuffer<CameraMatrix> g_PrevViewProjection;
-float2 g_Jitter;
 
 RWTexture2D<float4> g_Visibility;
 RWTexture2D<float> g_Depth;
@@ -61,13 +56,16 @@ RWTexture2D<float4> g_VertexNormal;
 RWTexture2D<float> g_Roughness;
 #endif
 
-#include "../../geometry/geometry.hlsl"
-#include "../../geometry/intersection.hlsl"
-#include "../../geometry/ray_intersection.hlsl"
-#include "../../geometry/ray_tracing.hlsl"
-#include "../../math/math.hlsl"
-#include "../../math/transform.hlsl"
-#include "../../materials/materials.hlsl"
+// Enable computations of intersection data from previous frame.
+// See "mesh.hlsl".
+#define HAS_PREVIOUS_INTERSECT
+#include "geometry/geometry.hlsl"
+#include "geometry/intersection.hlsl"
+#include "geometry/ray_intersection.hlsl"
+#include "geometry/ray_tracing.hlsl"
+#include "math/math.hlsl"
+#include "math/transform.hlsl"
+#include "materials/materials.hlsl"
 
 struct PathData
 {
@@ -78,22 +76,20 @@ void pathHit(PathData pathData, RayDesc ray, HitInfo hitData)
 {
     // Get instance information for current object
     Instance instance = g_InstanceBuffer[hitData.instanceIndex];
-    Mesh mesh = g_MeshBuffer[instance.mesh_index];
     float3x4 transform = g_TransformBuffer[instance.transform_index];
 
     // Fetch vertex data
 #if defined(HAS_SHADING_NORMAL) || defined(HAS_VERTEX_NORMAL)
-    TriangleNormUV triData = fetchVerticesNormUV(mesh, hitData.primitiveIndex);
+    TriangleNormUV triData = fetchVerticesNormUV(instance, hitData.primitiveIndex);
 #else
-    TriangleUV triData = fetchVerticesUV(mesh, hitData.primitiveIndex);
+    TriangleUV triData = fetchVerticesUV(instance, hitData.primitiveIndex);
 #endif
+    Triangle currentTriData = {triData.v0, triData.v1, triData.v2};
 
     // Set material
     Material material = g_MaterialBuffer[instance.material_index];
     // Calculate UV coordinates
     float2 uv = interpolate(triData.uv0, triData.uv1, triData.uv2, hitData.barycentrics);
-    // Calculate intersection position
-    float3 position = transformPoint(interpolate(triData.v0, triData.v1, triData.v2, hitData.barycentrics), transform);
 
     // Calculate geometry normal (assume CCW winding)
     float3 edge10 = triData.v1 - triData.v0;
@@ -147,15 +143,26 @@ void pathHit(PathData pathData, RayDesc ray, HitInfo hitData)
     }
     shadingNormal = normalize(mul(normalTransform, shadingNormal));
 #endif // HAS_SHADING_NORMAL
+
+    // Calculate intersection position
+    float3 position = interpolate(triData.v0, triData.v1, triData.v2, hitData.barycentrics);
+    float3 positionW = transformPoint(position, transform);
+
     // Write out buffers
     g_Visibility[pathData.pixel] = float4(hitData.barycentrics, asfloat(hitData.instanceIndex), asfloat(hitData.primitiveIndex));
-    g_Depth[pathData.pixel] = transformPointProjection(position, g_ViewProjection.data).z;
+    float3 positionVP = transformPointProjection(positionW, g_VBConstants[0].viewProjection);
+    g_Depth[pathData.pixel] = positionVP.z;
     g_GeometryNormal[pathData.pixel] = float4(0.5f * geometryNormal + 0.5f, 1.0f);
-
-    float3 prevPosition = transformPoint(interpolate(triData.v0, triData.v1, triData.v2, hitData.barycentrics), g_PrevTransformBuffer[instance.transform_index]);
-    float4 positionVP = mul(g_ViewProjection.data, float4(position, 1.0f));
-    float4 prevPositionVP = mul(g_PrevViewProjection.data, float4(prevPosition, 1.0f));
+    float3 prevPosition = position;
+    if (isInstanceVolatile(instance))
+    {
+        Triangle prevTriData = fetchPrevVertices(instance, hitData.primitiveIndex);
+        float3 prevPosition = interpolate(prevTriData.v0, prevTriData.v1, prevTriData.v2, hitData.barycentrics);
+    }
+    float3 prevPositionW = transformPoint(prevPosition, g_PreviousTransformBuffer[instance.transform_index]);
+    float3 prevPositionVP = transformPointProjection(prevPositionW, g_VBConstants[0].prevViewProjection);
     g_Velocity[pathData.pixel] = CalculateMotionVector(positionVP, prevPositionVP);
+
 #ifdef HAS_SHADING_NORMAL
     g_ShadingNormal[pathData.pixel] = float4(0.5f * shadingNormal + 0.5f, 1.0f);
 #endif
@@ -178,7 +185,7 @@ void visibilityRT(uint2 did, uint2 dimensions)
     }
 
     // Offset pixel to pixel center
-    float2 pixelRay = (float2)pixel + 0.5f.xx + g_Jitter;
+    float2 pixelRay = (float2) pixel + 0.5f.xx + g_VBConstants[0].jitter;
 
     // Calculate primary ray
     RayDesc ray = generateCameraRay(pixelRay, g_RayCamera);
@@ -195,12 +202,12 @@ void visibilityRT(uint2 did, uint2 dimensions)
         pathHit(pathData, ray, GetHitInfoRtInlineCommitted(rayQuery));
     }
 #else
-    TraceRay(g_Scene, RAY_FLAG_NONE, 0xFFu, 0, 0, 0, ray, pathData);
+    TraceRay(g_Scene, CLOSEST_RAY_FLAGS, 0xFFu, 0, 0, 0, ray, pathData);
 #endif
 }
 
 [numthreads(4, 8, 1)]
 void VisibilityBufferRT(in uint2 did : SV_DispatchThreadID)
 {
-    visibilityRT(did, g_BufferDimensions);
+    visibilityRT(did, g_VBConstants[0].dimensions);
 }

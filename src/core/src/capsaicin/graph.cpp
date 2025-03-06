@@ -19,7 +19,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
-#pragma once
 
 #include "graph.h"
 
@@ -31,50 +30,54 @@ uint32_t Graph::getValueCount() const noexcept
     return static_cast<uint32_t>(values.size());
 }
 
-void Graph::addValue(float value) noexcept
+void Graph::addValue(double const value) noexcept
 {
     values[current] = value;
     current         = (current + 1) % static_cast<uint32_t>(values.size());
 }
 
-float Graph::getLastAddedValue() const noexcept
+double Graph::getLastAddedValue() const noexcept
 {
-    if (current == 0) return getValueAtIndex(static_cast<uint32_t>(values.size() - 1));
+    if (current == 0)
+    {
+        return getValueAtIndex(static_cast<uint32_t>(values.size() - 1));
+    }
     return getValueAtIndex(current - 1);
 }
 
-float Graph::getValueAtIndex(uint32_t index) const noexcept
+double Graph::getValueAtIndex(uint32_t const index) const noexcept
 {
     return values[index];
 }
 
-float Graph::getAverageValue() const noexcept
+double Graph::getAverageValue() const noexcept
 {
     double   runningCount = 0.0;
     uint32_t validFrames  = 0;
     for (uint32_t i = 0; i < getValueCount(); ++i)
     {
-        runningCount += (double)getValueAtIndex(i);
-        if (getValueAtIndex(i) != 0.0f)
+        runningCount += getValueAtIndex(i);
+        if (getValueAtIndex(i) != 0.0)
         {
             ++validFrames;
         }
     }
-    return static_cast<float>(runningCount / (double)validFrames);
+    return runningCount / static_cast<double>(validFrames);
 }
 
 void Graph::reset() noexcept
 {
     current = 0;
-    values.fill(0.0f);
+    values.fill(0.0);
 }
 
-float Graph::GetValueAtIndex(void *object, int32_t index) noexcept
+float Graph::GetValueAtIndex(void *object, int32_t const index) noexcept
 {
-    Graph const  &graph      = *static_cast<Graph const *>(object);
-    const int32_t offset     = (int32_t)(graph.values.size()) - index;
-    const int32_t newIndex   = (int32_t)(graph.current) - offset;
-    const int32_t fixedIndex = (newIndex < 0 ? (int32_t)(graph.values.size()) + newIndex : newIndex);
-    return graph.values[fixedIndex];
+    Graph const  &graph    = *static_cast<Graph const *>(object);
+    int32_t const offset   = static_cast<int32_t>(graph.values.size()) - index;
+    int32_t const newIndex = static_cast<int32_t>(graph.current) - offset;
+    int32_t const fixedIndex =
+        (newIndex < 0 ? static_cast<int32_t>(graph.values.size()) + newIndex : newIndex);
+    return static_cast<float>(graph.values[static_cast<size_t>(fixedIndex)]);
 }
 } // namespace Capsaicin

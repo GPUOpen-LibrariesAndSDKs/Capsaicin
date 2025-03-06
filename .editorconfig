@@ -1,5 +1,5 @@
 
-[*.{c,c++,cc,config,cp,cpp,cu,cxx,h,hh,hpp,hxx,inc,inl]
+[*.{c,c++,cc,config,cp,cpp,cu,cxx,h,hh,hpp,hxx,inc,inl}]
 indent_style=space
 indent_size=4
 tab_width=4

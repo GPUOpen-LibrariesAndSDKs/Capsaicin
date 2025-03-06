@@ -28,7 +28,7 @@ Timeable::TimedSection::TimedSection(Timeable &parentTimeable, std::string_view 
     : parent(parentTimeable)
     , queryIndex(parent.queryCount++)
 {
-    if (queryIndex >= (uint32_t)parent.queries.size())
+    if (queryIndex >= static_cast<uint32_t>(parent.queries.size()))
     {
         parent.queries.resize(static_cast<size_t>(queryIndex) + 1);
         parent.queries[queryIndex].query = gfxCreateTimestampQuery(parent.gfx_);

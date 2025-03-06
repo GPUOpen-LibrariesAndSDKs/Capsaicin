@@ -24,8 +24,7 @@ THE SOFTWARE.
 
 int32_t WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int32_t)
 {
-    CapsaicinMain main("Capsaicin - Scene Viewer");
-    if (!main.run())
+    if (CapsaicinMain main("Capsaicin - Scene Viewer"); !main.run())
     {
         return 1;
     }

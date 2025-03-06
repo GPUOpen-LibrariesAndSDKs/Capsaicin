@@ -25,22 +25,23 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class BlueNoiseSampler
+class BlueNoiseSampler final
     : public Component
-    , public ComponentFactory::Registrar<BlueNoiseSampler>
+    , ComponentFactory::Registrar<BlueNoiseSampler>
 {
 public:
     static constexpr std::string_view Name = "BlueNoiseSampler";
-
-    BlueNoiseSampler(BlueNoiseSampler const &) noexcept = delete;
-
-    BlueNoiseSampler(BlueNoiseSampler &&) noexcept = default;
 
     /** Constructor. */
     BlueNoiseSampler() noexcept;
 
     /** Destructor. */
-    virtual ~BlueNoiseSampler() noexcept;
+    ~BlueNoiseSampler() noexcept override;
+
+    BlueNoiseSampler(BlueNoiseSampler const &other)                = delete;
+    BlueNoiseSampler(BlueNoiseSampler &&other) noexcept            = delete;
+    BlueNoiseSampler &operator=(BlueNoiseSampler const &other)     = delete;
+    BlueNoiseSampler &operator=(BlueNoiseSampler &&other) noexcept = delete;
 
     /**
      * Initialise any internal data or state.
@@ -67,7 +68,7 @@ public:
      * @param capsaicin Current framework context.
      * @param program   The shader program to bind parameters to.
      */
-    virtual void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept;
+    void addProgramParameters(CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept;
 
 private:
     GfxBuffer sobolBuffer;

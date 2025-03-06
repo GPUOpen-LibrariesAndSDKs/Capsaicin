@@ -23,7 +23,7 @@ THE SOFTWARE.
 #ifndef LIGHT_SAMPLER_GRID_SHARED_H
 #define LIGHT_SAMPLER_GRID_SHARED_H
 
-#include "../../gpu_shared.h"
+#include "gpu_shared.h"
 
 struct LightSamplingConstants
 {
@@ -50,7 +50,7 @@ struct LightSamplingConfiguration
     float3 sceneExtent; /*< World space size of the scene bounding box (sceneMax - sceneMin) */
 };
 #ifdef __cplusplus
-#pragma warning(pop)
+#    pragma warning(pop)
 #endif
 
 #endif

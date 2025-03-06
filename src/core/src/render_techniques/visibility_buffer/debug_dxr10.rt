@@ -1,5 +1,5 @@
 /**********************************************************************
-Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2022 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -76,7 +76,7 @@ void MyRaygenShader()
     // Unproject the pixel coordinate into a ray.
     float4 world = mul(g_ViewProjectionInverse, float4(screen_pos, 0, 1));
     world.xyz /= world.w;
-    
+
     RayDesc ray;
     ray.Origin = g_Eye;
     ray.Direction = normalize(world.xyz - g_Eye);

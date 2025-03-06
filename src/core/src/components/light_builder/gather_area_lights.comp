@@ -1,0 +1,167 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "gpu_shared.h"
+#include "light_builder_shared.h"
+
+StructuredBuffer<DrawData> g_DrawDataBuffer;
+uint g_DrawCount;
+
+RWStructuredBuffer<Light> g_LightBuffer;
+RWStructuredBuffer<uint> g_LightInstanceBuffer;
+
+StructuredBuffer<Material> g_MaterialBuffer;
+
+StructuredBuffer<Vertex> g_VertexBuffer;
+uint g_VertexDataIndex;
+StructuredBuffer<Meshlet> g_MeshletBuffer;
+StructuredBuffer<uint> g_MeshletPackBuffer;
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<float3x4> g_TransformBuffer;
+
+#include "math/transform.hlsl"
+#include "math/pack.hlsl"
+
+#define NUMVERTS 64
+#define NUMPRIMS 64
+
+groupshared float4 lds_vertex[NUMVERTS];
+
+float4 GetRadiance(uint materialIndex)
+{
+    // Get any light maps
+    Material material = g_MaterialBuffer[materialIndex];
+    float4 radiance = material.emissivity;
+
+#ifndef DISABLE_ALPHA_TESTING
+    if (material.normal_alpha_side.w == 2)
+    {
+        // Get any alpha value as this must modify the light emission
+        // Currently this does not take into account any values contained in an alpha texture.
+        //   We currently don't have any scenes that have this but should we then it is required that
+        //   emissive textures are pre-scaled by the values in the alpha texture.
+        radiance.xyz *= material.normal_alpha_side.y;
+    }
+#endif
+
+    return radiance;
+}
+
+/*
+// We used to cull triangles if they have zero effective radiance. But this adds issues in gathering area lights in to a list as now the length of each meshlet is unknown should primitives be culled. It also makes the whole process slower due to texture reads. As we done currently support animated textures then this optimisations has limited use as it should just be handled by scene processing such as surfaces with zero emissions and not flagged as emissive.
+bool CheckIsEmissive(in uint materialIndex, in float2 uv0, in float2 uv1, in float2 uv2, out float4 radiance)
+{
+    radiance = GetRadiance(materialIndex);
+    uint tex = asuint(radiance.w);
+    float3 emissivity = radiance.xyz;
+    if (tex != uint(-1))
+    {
+        // Get texture dimensions in order to determine LOD of visible solid angle
+        float2 size;
+        g_TextureMaps[NonUniformResourceIndex(tex)].GetDimensions(size.x, size.y);
+
+        // Approximate ray cone projection (ray tracing gems chapter 20)
+        float2 edgeUV0 = uv1 - uv0;
+        float2 edgeUV1 = uv2 - uv0;
+        float area_uv = size.x * size.y * abs(edgeUV0.x * edgeUV1.y - edgeUV1.x * edgeUV0.y);
+        float offset = 0.5f * log2(area_uv);
+        float2 uv = interpolate(uv0, uv1, uv2, (1.0f / 3.0f).xx);
+
+        // Get emissive texture component
+        emissivity *= g_TextureMaps[NonUniformResourceIndex(tex)].SampleLevel(g_TextureSampler, uv, offset).xyz;
+    }
+
+    return any(emissivity > 0.0f);
+}
+*/
+
+[NumThreads(NUMPRIMS, 1, 1)]
+void main(uint dtid : SV_DispatchThreadID, uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
+{
+    // Run one group per meshlet
+    if (gid > g_DrawCount)
+    {
+        return;
+    }
+
+    // Get draw information
+    DrawData draw = g_DrawDataBuffer[gid];
+    uint meshletIndex = draw.meshletIndex;
+    uint instanceID = draw.instanceIndex;
+
+    // Load the meshlet
+    Meshlet meshlet = g_MeshletBuffer[meshletIndex];
+
+    // Both meshlet vertex and index data is packed together
+    uint dataIndex = meshlet.data_offset_idx + gtid;
+
+    Instance instance = g_InstanceBuffer[instanceID];
+    float3x4 transform = g_TransformBuffer[instance.transform_index];
+
+    // Get all the vertices for the meshlet into LDS
+    if (gtid < meshlet.vertex_count)
+    {
+        // Export vertex data
+        uint vertexIndex = g_MeshletPackBuffer[dataIndex] + instance.vertex_offset_idx[g_VertexDataIndex];
+        Vertex vertex = g_VertexBuffer[vertexIndex];
+
+        float3 position = transformPoint(vertex.getPosition(), transform);
+
+        lds_vertex[gtid] = float4(position, packUVs(vertex.getUV()));
+    }
+
+    GroupMemoryBarrierWithGroupSync(); // required for lds_vertex
+
+    // Write all primitives to the light list
+    if (gtid < meshlet.triangle_count)
+    {
+        // Unpack primitive indexes
+        uint indiceIndex = dataIndex + meshlet.vertex_count;
+        uint packedIndices = g_MeshletPackBuffer[indiceIndex];
+        uint3 unpackedIndices = uint3(packedIndices & 0x3F, (packedIndices >> 10) & 0x3F, packedIndices >> 20);
+
+        // Unpack vertices from LDS
+        float3 vertexA = lds_vertex[unpackedIndices.x].xyz;
+        float3 vertexB = lds_vertex[unpackedIndices.y].xyz;
+        float3 vertexC = lds_vertex[unpackedIndices.z].xyz;
+
+        float packedUVA = lds_vertex[unpackedIndices.x].w;
+        float packedUVB = lds_vertex[unpackedIndices.y].w;
+        float packedUVC = lds_vertex[unpackedIndices.z].w;
+
+        float4 radiance = GetRadiance(instance.material_index);
+
+        // Write the area light to memory
+        {
+            Light light;
+            light.radiance = radiance;
+            light.v1 = float4(vertexA, packedUVA);
+            light.v2 = float4(vertexB, packedUVB);
+            light.v3 = float4(vertexC, packedUVC);
+
+            // The light ID for the current light is the instanceOffset for the current instance offset by the current primitiveID
+            uint primitiveID = gtid + meshlet.mesh_prim_offset_idx;
+            uint idx = primitiveID + g_LightInstanceBuffer[instanceID];
+            g_LightBuffer[idx] = light;
+        }
+    }
+}

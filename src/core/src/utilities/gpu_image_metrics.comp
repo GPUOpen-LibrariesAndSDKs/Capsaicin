@@ -20,8 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ********************************************************************/
 
-#include "../math/math.hlsl"
-#include "../math/color.hlsl"
+#include "math/math.hlsl"
+#include "math/color.hlsl"
 
 uint2 g_ImageDimensions;
 

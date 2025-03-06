@@ -1,0 +1,214 @@
+/**********************************************************************
+Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#include "visibility_buffer_shared.h"
+
+#include "math/transform.hlsl"
+#include "math/pack.hlsl"
+
+StructuredBuffer<DrawConstants> g_VBConstants;
+
+StructuredBuffer<DrawData> g_DrawDataBuffer;
+StructuredBuffer<MeshletCull> g_MeshletCullBuffer;
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<float3x4> g_TransformBuffer;
+StructuredBuffer<Material> g_MaterialBuffer;
+
+#ifdef VISIBILITY_ENABLE_HZB
+StructuredBuffer<uint> g_MeshletPreviousVisibilityHistory; /*Only need read on first pass*/
+RWStructuredBuffer<uint> g_MeshletVisibilityHistory;
+bool g_FirstPass;
+#endif
+Texture2D<float> g_DepthPyramid;
+SamplerState g_DepthSampler;
+
+// Use groupshared to cooperatively build the exported payload data
+groupshared MeshPayload meshPayload;
+
+/**
+ * Projects a view space sphere to screen AABB.
+ * @param centerVS       The view space position of the sphere center.
+ * @param radius         The radius of the sphere.
+ * @param zNear          The near clipping plane.
+ * @param projection0011 The [0][0] and [1][1] values of the projection matrix
+ * @return True if possible to project sphere.
+ */
+bool sphereProjection(float3 centerVS, float radius, float zNear, float2 projection0011, out float4 aabb)
+{
+    if (centerVS.z < (radius + zNear))
+    {
+        // Sphere intersects near plane
+        return false;
+    }
+
+    // 2D Polyhedral Bounds of a Clipped, Perspective-Projected 3D Sphere. Michael Mara, Morgan McGuire. 2013
+    float3 cr = centerVS * radius;
+    float czr2 = centerVS.z * centerVS.z - radius * radius;
+
+    float2 vxy = sqrt(squared(centerVS.xy) + czr2.xx);
+    float4 vxx = centerVS.xyzz * vxy.xyxy;
+    float minx = (vxx.x - cr.z) / (vxx.z + cr.x);
+    float maxx = (vxx.x + cr.z) / (vxx.z - cr.x);
+
+    float miny = (vxx.y + cr.z) / (vxx.w - cr.y);
+    float maxy = (vxx.y - cr.z) / (vxx.w + cr.y);
+
+    // Convert to UV space by first converting to clip space then scaling/offsetting
+    // Note: This assumes symmetric projection matrix (i.e. wont work with VR)
+    float2 scaler = projection0011 * float2(0.5f, -0.5f);
+    aabb = float4(minx, miny, maxx, maxy) * scaler.xyxy;
+    aabb += 0.5f.xxxx;
+
+    return true;
+}
+
+/**
+ * Checks if a meshlet is visible based on current view data.
+ * @param meshletID  The meshlet ID to check visibility on.
+ * @param instanceID The instance the meshlet belongs to.
+ * @return True if visible.
+ */
+bool isVisible(uint meshletID, uint instanceID)
+{
+    MeshletCull cullData = g_MeshletCullBuffer[meshletID];
+    Instance instance = g_InstanceBuffer[instanceID];
+    uint transformID = instance.transform_index;
+    float3x4 world = g_TransformBuffer[transformID];
+
+    if (instance.vertex_offset_idx[0] != instance.vertex_offset_idx[1])
+    {
+        // Currently we must skip visibility culling of animated objects
+        return true;
+    }
+
+    // Test of the bounding sphere against the view frustum
+    float3 sphereCenter = transformPoint(cullData.sphere.xyz, world);
+    float4x3 worldT = transpose(world);
+    float3 gscale = float3(lengthSqr(worldT[0]), lengthSqr(worldT[1]), lengthSqr(worldT[2]));
+    float scale = sqrt(max(max(gscale.x, gscale.y), gscale.z));
+    float radius = cullData.sphere.w * scale;
+    for (int i = 0; i < 6; ++i)
+    {
+        if ((dot(sphereCenter, g_VBConstants[0].cameraFrustum[i].xyz) + g_VBConstants[0].cameraFrustum[i].w) < -radius)
+        {
+            return false;
+        }
+    }
+
+#ifdef VISIBILITY_ENABLE_HZB
+    if (!g_FirstPass)
+    {
+        // If we are using 2 pass HzB mode then on the second pass we check against the calculated HzB
+        //  from the first pass
+        float3 centerVS = transformPoint(sphereCenter, g_VBConstants[0].view);
+        // Must convert from RH to LH (i.e. view has negative depth)
+        centerVS.z = -centerVS.z;
+        // Get the axis aligned bounding box for the bounding sphere over the current depth buffer
+        float4 aabb;
+        if (sphereProjection(centerVS, radius, g_VBConstants[0].nearZ, g_VBConstants[0].projection0011, aabb))
+        {
+            float2 dimensions = (aabb.zw - aabb.xy) * g_VBConstants[0].dimensions;
+            float mipLevel = floor(log2(hmax(dimensions)));
+
+            // Sampler is set to use min reduction of 2x2 neighbourhood
+            float depth = g_DepthPyramid.SampleLevel(g_DepthSampler, (aabb.xy + aabb.zw) * 0.5, mipLevel).x;
+            float depthSphere = g_VBConstants[0].nearZ / (centerVS.z - radius);
+
+            // Reject if entirely behind existing occluding geometry in the HzB
+            if (depthSphere <= depth)
+            {
+                return false;
+            }
+        }
+    }
+#endif
+
+    // Test meshlet normal cone for back facing
+    float3 coneAxis = transformVector(cullData.cone.xyz, world);
+    bool cull = dot(sphereCenter - g_VBConstants[0].cameraPosition, coneAxis) >= cullData.cone.w * length(sphereCenter - g_VBConstants[0].cameraPosition) + radius;
+    if (cull)
+    {
+        // Correctly avoid culling double sided surfaces
+        Material material = g_MaterialBuffer[instance.material_index];
+        return asuint(material.normal_alpha_side.z) == 1;
+    }
+    return true;
+}
+
+[NumThreads(MESHPAYLOADSIZE, 1, 1)]
+void main(uint dtid : SV_DispatchThreadID, uint gid : SV_GroupID)
+{
+    bool visible = false;
+    uint instanceID;
+    uint meshletID;
+    if (dtid < g_VBConstants[0].drawCount)
+    {
+        // Get draw information
+        DrawData draw = g_DrawDataBuffer[dtid];
+        meshletID = draw.meshletIndex;
+        instanceID = draw.instanceIndex;
+
+#ifdef VISIBILITY_ENABLE_HZB
+        // If running 2-pass occlusion culling we check and then only render geometry that was previously
+        //  considered visible in the previous frame. This geometry will be rendered in the first pass and
+        //  used to create the HzB occlusion buffer. All remaining geometry will then be tested against the
+        //  HzB in the second pass.
+        uint oldBits = g_MeshletPreviousVisibilityHistory[dtid >> 5];
+        bool previouslyVisible = (oldBits & (1U << (dtid & 31))) != 0;
+        bool passVisibility = g_FirstPass ? previouslyVisible : !previouslyVisible;
+
+        if (passVisibility || !g_FirstPass)
+#endif
+        {
+            // Perform meshlet culling
+            visible = isVisible(meshletID, instanceID);
+
+            // Compact visible meshlets into the exported payload data. Only meshlets that passed the
+            //  visibility test will have mesh shaders executed for them.
+            if (visible)
+            {
+                uint index = WavePrefixCountBits(visible);
+                meshPayload.meshletIDs[index] = meshletID;
+                meshPayload.instanceIDs[index] = instanceID;
+            }
+        }
+    }
+
+#ifdef VISIBILITY_ENABLE_HZB
+    // If the is the second pass of a 2-pass HZB test then we must write out the calculated visibility
+    //  bits for the current frame so they can be used in the next.
+    if (!g_FirstPass)
+    {
+        // Write out visibility bits
+        uint waveCombine = WaveActiveBallot(visible).x;
+        if (WaveIsFirstLane())
+        {
+            g_MeshletVisibilityHistory[dtid >> 5] = waveCombine;
+        }
+    }
+#endif
+
+
+    // Dispatch the required number of mesh shaders based on visible meshlets (1 group per meshlet)
+    uint visibleCount = WaveActiveCountBits(visible);
+    DispatchMesh(visibleCount, 1, 1, meshPayload);
+}

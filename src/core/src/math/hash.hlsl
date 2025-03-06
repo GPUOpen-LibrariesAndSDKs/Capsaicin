@@ -211,4 +211,31 @@ float trigHash(float4 values)
     return trigHash(float3(trigHash(values.xy), values.z, values.w));
 }
 
+/**
+ * Hash an input value based on Jenkins hashing function. http://burtleburtle.net/bob/hash/integer.html
+ * @param value The input value to hash.
+ * @return The calculated hash value.
+ */
+uint jenkinsHash32(uint value)
+{
+    value = (value + 0x7ed55d16) + (value << 12);
+    value = (value ^ 0xc761c23c) ^ (value >> 19);
+    value = (value + 0x165667b1) + (value << 5);
+    value = (value + 0xd3a2646c) ^ (value << 9);
+    value = (value + 0xfd7046c5) + (value << 3);
+    value = (value ^ 0xb55a4f09) ^ (value >> 16);
+    return value;
+}
+
+/**
+ * Hash an input value based on Jenkins hashing function. http://burtleburtle.net/bob/hash/integer.html
+ * @param value The input value to hash.
+ * @return The calculated hash value.
+ */
+uint jenkinsHash64(uint64_t value)
+{
+    return jenkinsHash32(uint((value >> 0)  & 0xffffffff))
+         ^ jenkinsHash32(uint((value >> 32) & 0xffffffff));
+}
+
 #endif // HASH_HLSL

@@ -22,81 +22,31 @@ THE SOFTWARE.
 #pragma once
 
 #include "capsaicin_internal.h"
-#include "thread_pool.h"
+
+#include <ppl.h>
 
 namespace Capsaicin
 {
 template<typename TYPE>
-void HashCombine(size_t &seed, TYPE const &value)
+size_t HashCombine(size_t seed, TYPE const &value)
 {
-    seed ^= std::hash<TYPE> {}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed ^ (std::hash<TYPE> {}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2));
 }
 
 template<typename TYPE>
 size_t HashReduce(TYPE const *values, uint32_t count)
 {
-    uint32_t index = 0;
-
-    constexpr uint32_t const block_size = 16;
-
-    uint32_t block_count = (count + block_size - 1) / block_size;
-
-    if (!block_count)
-    {
-        return (size_t)0x12345678u;
-    }
-
-    size_t *partial_hashes[] = {
-        (size_t *)alloca(block_count * sizeof(size_t)),
-        (size_t *)alloca(((block_count + block_size - 1) / block_size) * sizeof(size_t)),
-    };
-
-    Capsaicin::ThreadPool().Dispatch(
-        [&](uint32_t i) {
-            size_t hash = 0x12345678u;
-
-            for (uint32_t j = i * block_size; j < (i + 1) * block_size; ++j)
+    size_t const result = concurrency::parallel_reduce(
+        values, values + count, static_cast<size_t>(0x12345678U),
+        [](TYPE const *start, TYPE const *end, size_t hash) -> size_t {
+            for (auto j = start; j < end; ++j)
             {
-                if (j >= count)
-                {
-                    break;
-                }
-
-                HashCombine(hash, values[j]);
+                hash = HashCombine(hash, *j);
             }
-
-            partial_hashes[index][i] = hash;
+            return hash;
         },
-        block_count, 1);
-
-    while (block_count > 1)
-    {
-        count = block_count;
-
-        block_count = (block_count + block_size - 1) / block_size;
-
-        Capsaicin::ThreadPool().Dispatch(
-            [&](uint32_t i) {
-                size_t hash = partial_hashes[index][i * block_size];
-
-                for (uint32_t j = i * block_size + 1; j < (i + 1) * block_size; ++j)
-                {
-                    if (j >= count)
-                    {
-                        break;
-                    }
-
-                    HashCombine(hash, partial_hashes[index][j]);
-                }
-
-                partial_hashes[1 - index][i] = hash;
-            },
-            block_count, 1);
-
-        index = 1 - index;
-    }
-
-    return *partial_hashes[index];
+        [](size_t const hash1, size_t const hash2) -> size_t { return HashCombine(hash1, hash2); });
+    return result;
 }
 } // namespace Capsaicin
 
@@ -105,14 +55,14 @@ namespace std
 template<>
 struct hash<GfxMesh>
 {
-    inline size_t operator()(GfxMesh const &value) const
+    size_t operator()(GfxMesh const &value) const noexcept
     {
-        size_t hash = 0x12345678u;
+        size_t hash = 0x12345678U;
 
-        Capsaicin::HashCombine(hash, value.bounds_min);
-        Capsaicin::HashCombine(hash, value.bounds_max);
-        Capsaicin::HashCombine(hash, value.vertices.size());
-        Capsaicin::HashCombine(hash, value.indices.size());
+        hash = Capsaicin::HashCombine(hash, value.bounds_min);
+        hash = Capsaicin::HashCombine(hash, value.bounds_max);
+        hash = Capsaicin::HashCombine(hash, value.vertices.size());
+        hash = Capsaicin::HashCombine(hash, value.indices.size());
 
         return hash;
     }
@@ -121,13 +71,13 @@ struct hash<GfxMesh>
 template<>
 struct hash<GfxInstance>
 {
-    inline size_t operator()(GfxInstance const &value) const
+    size_t operator()(GfxInstance const &value) const noexcept
     {
-        size_t hash = 0x12345678u;
+        size_t hash = 0x12345678U;
 
-        Capsaicin::HashCombine(hash, (uint64_t)value.mesh);
-        Capsaicin::HashCombine(hash, (uint64_t)value.material);
-        Capsaicin::HashCombine(hash, value.transform);
+        hash = Capsaicin::HashCombine(hash, static_cast<uint64_t>(value.mesh));
+        hash = Capsaicin::HashCombine(hash, static_cast<uint64_t>(value.material));
+        hash = Capsaicin::HashCombine(hash, value.transform);
 
         return hash;
     }
@@ -136,17 +86,38 @@ struct hash<GfxInstance>
 template<>
 struct hash<GfxLight>
 {
-    inline size_t operator()(GfxLight const &value) const
+    size_t operator()(GfxLight const &value) const noexcept
     {
-        size_t hash = 0x12345678u;
+        size_t hash = 0x12345678U;
 
-        Capsaicin::HashCombine(hash, value.color);
-        Capsaicin::HashCombine(hash, value.intensity);
-        Capsaicin::HashCombine(hash, value.position);
-        Capsaicin::HashCombine(hash, value.direction);
-        Capsaicin::HashCombine(hash, value.range);
-        Capsaicin::HashCombine(hash, value.inner_cone_angle);
-        Capsaicin::HashCombine(hash, value.outer_cone_angle);
+        hash = Capsaicin::HashCombine(hash, value.color);
+        hash = Capsaicin::HashCombine(hash, value.intensity);
+        hash = Capsaicin::HashCombine(hash, value.position);
+        hash = Capsaicin::HashCombine(hash, value.direction);
+        hash = Capsaicin::HashCombine(hash, value.range);
+        hash = Capsaicin::HashCombine(hash, value.inner_cone_angle);
+        hash = Capsaicin::HashCombine(hash, value.outer_cone_angle);
+
+        return hash;
+    }
+};
+
+template<>
+struct hash<GfxMaterial>
+{
+    size_t operator()(GfxMaterial const &value) const noexcept
+    {
+        size_t hash = 0x12345678U;
+
+        hash = Capsaicin::HashCombine(hash, value.albedo);
+        hash = Capsaicin::HashCombine(hash, static_cast<uint32_t>(value.albedo_map));
+        hash = Capsaicin::HashCombine(hash, value.emissivity);
+        hash = Capsaicin::HashCombine(hash, static_cast<uint32_t>(value.emissivity_map));
+        hash = Capsaicin::HashCombine(hash, value.metallicity);
+        hash = Capsaicin::HashCombine(hash, static_cast<uint32_t>(value.metallicity_map));
+        hash = Capsaicin::HashCombine(hash, value.roughness);
+        hash = Capsaicin::HashCombine(hash, static_cast<uint32_t>(value.roughness_map));
+        hash = Capsaicin::HashCombine(hash, static_cast<uint32_t>(value.normal_map));
 
         return hash;
     }
@@ -155,13 +126,29 @@ struct hash<GfxLight>
 template<>
 struct hash<glm::mat4>
 {
-    inline size_t operator()(glm::mat4 const &value) const
+    size_t operator()(glm::mat4 const &value) const noexcept
     {
-        size_t hash = 0x12345678u;
+        size_t hash = 0x12345678U;
 
         for (uint32_t i = 0; i < 16; ++i)
         {
-            Capsaicin::HashCombine(hash, value[i >> 2u][i & 0x3u]);
+            hash = Capsaicin::HashCombine(hash, value[i >> 2U][i & 0x3U]);
+        }
+
+        return hash;
+    }
+};
+
+template<>
+struct hash<glm::vec4>
+{
+    size_t operator()(glm::vec4 const &value) const noexcept
+    {
+        size_t hash = 0x12345678U;
+
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            hash = Capsaicin::HashCombine(hash, value[i]);
         }
 
         return hash;
@@ -171,13 +158,13 @@ struct hash<glm::mat4>
 template<>
 struct hash<glm::vec3>
 {
-    inline size_t operator()(glm::vec3 const &value) const
+    size_t operator()(glm::vec3 const &value) const noexcept
     {
-        size_t hash = 0x12345678u;
+        size_t hash = 0x12345678U;
 
         for (uint32_t i = 0; i < 3; ++i)
         {
-            Capsaicin::HashCombine(hash, value[i]);
+            hash = Capsaicin::HashCombine(hash, value[i]);
         }
 
         return hash;

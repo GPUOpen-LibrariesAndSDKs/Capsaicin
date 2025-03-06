@@ -25,17 +25,22 @@ THE SOFTWARE.
 
 namespace Capsaicin
 {
-class VarianceEstimate : public RenderTechnique
+class VarianceEstimate final : public RenderTechnique
 {
 public:
     VarianceEstimate();
-    ~VarianceEstimate();
+    ~VarianceEstimate() override;
+
+    VarianceEstimate(VarianceEstimate const &other)                = delete;
+    VarianceEstimate(VarianceEstimate &&other) noexcept            = delete;
+    VarianceEstimate &operator=(VarianceEstimate const &other)     = delete;
+    VarianceEstimate &operator=(VarianceEstimate &&other) noexcept = delete;
 
     /**
-     * Gets the required list of AOVs needed for the current render technique.
-     * @return A list of all required AOV buffers.
+     * Gets the required list of shared textures needed for the current render technique.
+     * @return A list of all required shared textures.
      */
-    AOVList getAOVs() const noexcept override;
+    [[nodiscard]] SharedTextureList getSharedTextures() const noexcept override;
 
     /**
      * Initialise any internal data or state.

@@ -52,34 +52,34 @@ void LightSamplerUniform::run([[maybe_unused]] CapsaicinInternal &capsaicin) noe
 
 bool LightSamplerUniform::needsRecompile(CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
     return lightBuilder->needsRecompile(capsaicin);
 }
 
 std::vector<std::string> LightSamplerUniform::getShaderDefines(
     CapsaicinInternal const &capsaicin) const noexcept
 {
-    auto                     lightBuilder = capsaicin.getComponent<LightBuilder>();
-    std::vector<std::string> baseDefines(std::move(lightBuilder->getShaderDefines(capsaicin)));
+    auto const  lightBuilder = capsaicin.getComponent<LightBuilder>();
+    std::vector baseDefines(lightBuilder->getShaderDefines(capsaicin));
     return baseDefines;
 }
 
 void LightSamplerUniform::addProgramParameters(
-    CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
     lightBuilder->addProgramParameters(capsaicin, program);
-}
-
-bool LightSamplerUniform::getLightsUpdated(CapsaicinInternal const &capsaicin) const noexcept
-{
-    auto lightBuilder = capsaicin.getComponent<LightBuilder>();
-    return lightBuilder->getLightsUpdated();
 }
 
 std::string_view LightSamplerUniform::getHeaderFile() const noexcept
 {
-    return std::string_view("\"../../components/light_sampler_uniform/light_sampler_uniform.hlsl\"");
+    return "\"../../components/light_sampler_uniform/light_sampler_uniform.hlsl\"";
+}
+
+bool LightSamplerUniform::getLightSettingsUpdated(CapsaicinInternal const &capsaicin) const noexcept
+{
+    auto const lightBuilder = capsaicin.getComponent<LightBuilder>();
+    return lightBuilder->getLightSettingsUpdated();
 }
 
 void LightSamplerUniform::terminate() noexcept {}

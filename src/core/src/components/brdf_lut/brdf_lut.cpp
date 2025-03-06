@@ -40,9 +40,8 @@ bool BrdfLut::init(CapsaicinInternal const &capsaicin) noexcept
     brdf_lut_buffer_ = gfxCreateTexture2D(gfx_, brdf_lut_size_, brdf_lut_size_, DXGI_FORMAT_R16G16_FLOAT);
     brdf_lut_buffer_.setName("Capsaicin_BrdfLut_LutBuffer");
 
-    GfxProgram const brdf_lut_program =
-        gfxCreateProgram(gfx_, "components/brdf_lut/brdf_lut", capsaicin.getShaderPath());
-    GfxKernel const brdf_lut_kernel = gfxCreateComputeKernel(gfx_, brdf_lut_program, "ComputeBrdfLut");
+    GfxProgram const brdf_lut_program = capsaicin.createProgram("components/brdf_lut/brdf_lut");
+    GfxKernel const  brdf_lut_kernel  = gfxCreateComputeKernel(gfx_, brdf_lut_program, "ComputeBrdfLut");
 
     gfxProgramSetParameter(gfx_, brdf_lut_program, "g_LutBuffer", brdf_lut_buffer_);
     gfxProgramSetParameter(gfx_, brdf_lut_program, "g_LutSize", brdf_lut_size_);
@@ -72,7 +71,7 @@ void BrdfLut::terminate() noexcept
 }
 
 void BrdfLut::addProgramParameters(
-    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_LutBuffer", brdf_lut_buffer_);
     gfxProgramSetParameter(gfx_, program, "g_LutSize", brdf_lut_size_);

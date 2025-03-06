@@ -24,17 +24,24 @@ THE SOFTWARE.
 
 #include "capsaicin_internal.h"
 #include "hash_reduce.h"
+#include "light_builder_shared.h"
 #include "render_technique.h"
 
 namespace Capsaicin
 {
+// Local luminance function used for culling low emissive lights
+static float luminance(float3 const rgb)
+{
+    return dot(rgb, float3(0.2126F, 0.7152F, 0.0722F));
+}
+
 LightBuilder::LightBuilder() noexcept
     : Component(Name)
 {}
 
 LightBuilder::~LightBuilder() noexcept
 {
-    terminate();
+    LightBuilder::terminate();
 }
 
 RenderOptionList LightBuilder::getRenderOptions() noexcept
@@ -43,6 +50,9 @@ RenderOptionList LightBuilder::getRenderOptions() noexcept
     newOptions.emplace(RENDER_OPTION_MAKE(delta_light_enable, options));
     newOptions.emplace(RENDER_OPTION_MAKE(area_light_enable, options));
     newOptions.emplace(RENDER_OPTION_MAKE(environment_light_enable, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(environment_light_cosine_enable, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(low_emission_area_lights_disable, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(low_emission_threshold, options));
     return newOptions;
 }
 
@@ -52,30 +62,51 @@ LightBuilder::RenderOptions LightBuilder::convertOptions(RenderOptionList const 
     RENDER_OPTION_GET(delta_light_enable, newOptions, options)
     RENDER_OPTION_GET(area_light_enable, newOptions, options)
     RENDER_OPTION_GET(environment_light_enable, newOptions, options)
+    RENDER_OPTION_GET(environment_light_cosine_enable, newOptions, options)
+    RENDER_OPTION_GET(low_emission_area_lights_disable, newOptions, options)
+    RENDER_OPTION_GET(low_emission_threshold, newOptions, options)
     return newOptions;
+}
+
+SharedBufferList LightBuilder::getSharedBuffers() const noexcept
+{
+    SharedBufferList buffers;
+    buffers.push_back({"Meshlets", SharedBuffer::Access::Read});
+    buffers.push_back({"MeshletPack", SharedBuffer::Access::Read});
+    buffers.push_back({"PrevLightBuffer", SharedBuffer::Access::Write,
+        (SharedBuffer::Flags::Allocate | SharedBuffer::Flags::Optional), 0, sizeof(Light)});
+    return buffers;
 }
 
 bool LightBuilder::init(CapsaicinInternal const &capsaicin) noexcept
 {
-    gatherAreaLightsProgram =
-        gfxCreateProgram(gfx_, "components/light_builder/gather_area_lights", capsaicin.getShaderPath());
-    countAreaLightsKernel   = gfxCreateGraphicsKernel(gfx_, gatherAreaLightsProgram, "CountAreaLights");
-    scatterAreaLightsKernel = gfxCreateGraphicsKernel(gfx_, gatherAreaLightsProgram, "ScatterAreaLights");
+    gatherAreaLightsProgram = capsaicin.createProgram("components/light_builder/gather_area_lights");
+    gatherAreaLightsKernel  = gfxCreateComputeKernel(gfx_, gatherAreaLightsProgram, "main");
 
     lightCountBuffer = gfxCreateBuffer<uint32_t>(gfx_, 1);
     lightCountBuffer.setName("LightCountBuffer");
 
-    const uint32_t backBufferCount = gfxGetBackBufferCount(gfx_);
-    lightCountBufferTemp.reserve(backBufferCount);
-    for (uint32_t i = 0; i < backBufferCount; ++i)
+    options = convertOptions(capsaicin.getOptions());
+
+    // Setup initial light counts for current scene
+    auto const scene = capsaicin.getScene();
+    lightHash = HashReduce(gfxSceneGetObjects<GfxLight>(scene), gfxSceneGetObjectCount<GfxLight>(scene));
+    deltaLightCount = (options.delta_light_enable) ? gfxSceneGetObjectCount<GfxLight>(scene) : 0;
+    areaLightTotal  = 0;
+    for (uint32_t i = 0; i < gfxSceneGetObjectCount<GfxInstance>(scene); ++i)
     {
-        GfxBuffer   buffer = gfxCreateBuffer<uint32_t>(gfx_, 1, nullptr, kGfxCpuAccess_Read);
-        std::string name   = "AreaLightCountCopyBuffer";
-        name += std::to_string(i);
-        buffer.setName(name.c_str());
-        lightCountBufferTemp.emplace_back(false, buffer);
+        auto const &instance = gfxSceneGetObjects<GfxInstance>(scene)[i];
+        if (instance.mesh && instance.material && gfxMaterialIsEmissive(*instance.material))
+        {
+            auto const primitives = static_cast<uint32_t>(instance.mesh->indices.size()) / 3;
+            areaLightTotal += primitives;
+        }
     }
-    lightHash = 0;
+    areaLightCount      = (options.area_light_enable) ? areaLightTotal : 0;
+    environmentMapCount = (options.environment_light_enable && !!capsaicin.getEnvironmentBuffer()) ? 1 : 0;
+    // Environment map may not always be loaded at init time so assume that one will be loaded if no other
+    // lights exist
+    environmentMapCount = areaLightCount == 0 && deltaLightCount == 0 ? 1 : environmentMapCount;
 
     return !!gatherAreaLightsProgram;
 }
@@ -85,78 +116,68 @@ void LightBuilder::run(CapsaicinInternal &capsaicin) noexcept
     auto optionsNew = convertOptions(capsaicin.getOptions());
     auto scene      = capsaicin.getScene();
 
-    // Check if meshes were updated
-    std::vector<uint32_t> lightInstancePrimitiveCount;
-    if (capsaicin.getMeshesUpdated() || capsaicin.getFrameIndex() == 0)
-    {
-        areaLightTotal = 0;
-        lightInstancePrimitiveCount.resize(gfxSceneGetObjectCount<GfxInstance>(scene));
-        for (uint32_t i = 0; i < gfxSceneGetObjectCount<GfxInstance>(scene); ++i)
-        {
-            auto const &instance = gfxSceneGetObjects<GfxInstance>(scene)[i];
-            if (instance.mesh && instance.material && gfxMaterialIsEmissive(*instance.material))
-            {
-                lightInstancePrimitiveCount[i] = areaLightTotal;
-                areaLightTotal += (uint32_t)instance.mesh->indices.size() / 3;
-            }
-        }
-    }
-
     // Check whether we need to update lighting structures
-    size_t oldLightHash = lightHash;
-    if (!capsaicin.getPaused() || capsaicin.getFrameIndex() == 0)
-        lightHash = Capsaicin::HashReduce(
-            gfxSceneGetObjects<GfxLight>(scene), gfxSceneGetObjectCount<GfxLight>(scene));
-
-    // Get last valid area light count value
-    const uint32_t bufferIndex = gfxGetBackBufferIndex(gfx_);
-    if (lightCountBufferTemp[bufferIndex].first)
+    size_t const oldLightHash = lightHash;
+    if (options.delta_light_enable && !capsaicin.getPaused())
     {
-        areaLightCount = *gfxBufferGetData<uint32_t>(gfx_, lightCountBufferTemp[bufferIndex].second);
-        areaLightCount -= deltaLightCount + environmentMapCount;
-        lightCountBufferTemp[bufferIndex].first = false;
+        lightHash = HashReduce(gfxSceneGetObjects<GfxLight>(scene), gfxSceneGetObjectCount<GfxLight>(scene));
     }
 
-    auto     environmentMap     = capsaicin.getEnvironmentBuffer();
-    uint32_t oldDeltaLightCount = deltaLightCount;
-    deltaLightCount = (optionsNew.delta_light_enable) ? gfxSceneGetObjectCount<GfxLight>(scene) : 0;
-    uint32_t oldAreaLightMaxCount = areaLightMaxCount;
-    areaLightMaxCount             = (optionsNew.area_light_enable) ? areaLightTotal : 0;
+    if (!options.area_light_enable
+        && (capsaicin.getMeshesUpdated() || (areaLightTotal > 0 && capsaicin.getTransformsUpdated())))
+    {
+        // Need to reset area light count as it won't get counted while area lights are disabled
+        areaLightTotal = std::numeric_limits<uint32_t>::max();
+    }
 
-    // Disable lights that are not found in scene
-    /*optionsNew.delta_light_enable       = optionsNew.delta_light_enable && deltaLightCount > 0;
-    optionsNew.area_light_enable        = optionsNew.area_light_enable && areaLightMaxCount > 0;
-    optionsNew.environment_light_enable = optionsNew.environment_light_enable && !!environmentMap;*/
+    auto const hasPreviousLightBuffer = capsaicin.hasSharedBuffer("PrevLightBuffer");
+    auto const environmentMap         = capsaicin.getEnvironmentBuffer();
+    lightsUpdated                     = false;
+    auto const oldDeltaLightCount     = deltaLightCount;
+    auto const oldAreaLightCount      = areaLightCount;
+    auto const oldEnvironmentMapCount = environmentMapCount;
+    deltaLightCount     = (optionsNew.delta_light_enable) ? gfxSceneGetObjectCount<GfxLight>(scene) : 0;
+    areaLightCount      = (optionsNew.area_light_enable) ? areaLightTotal : 0;
+    environmentMapCount = (optionsNew.environment_light_enable && !!environmentMap) ? 1 : 0;
 
-    lightsUpdated       = false;
-    lightBufferIndex    = (1 - lightBufferIndex);
-    lightSettingChanged = options.delta_light_enable != optionsNew.delta_light_enable
-                       || options.area_light_enable != optionsNew.area_light_enable
-                       || options.environment_light_enable != optionsNew.environment_light_enable;
-    options = optionsNew;
-    if (oldLightHash != lightHash
-        || (capsaicin.getEnvironmentMapUpdated() && options.environment_light_enable)
-        || (oldAreaLightMaxCount != areaLightMaxCount) || (oldDeltaLightCount != deltaLightCount)
-        || lightSettingChanged
-        || (areaLightMaxCount > 0 && (capsaicin.getMeshesUpdated() || capsaicin.getTransformsUpdated())))
+    auto const cullLowChanged = optionsNew.low_emission_area_lights_disable
+                             && (options.low_emission_threshold != optionsNew.low_emission_threshold);
+    lightIndexesChanged = (oldEnvironmentMapCount != environmentMapCount)
+                       || (oldAreaLightCount != areaLightCount) || (oldDeltaLightCount != deltaLightCount)
+                       || cullLowChanged || capsaicin.getFrameIndex() == 0;
+    bool const areaLightUpdated =
+        optionsNew.area_light_enable
+        && (capsaicin.getMeshesUpdated() || capsaicin.getInstancesUpdated() || capsaicin.getFrameIndex() == 0
+            || areaLightTotal == std::numeric_limits<uint32_t>::max()
+            || (areaLightCount > 0 && capsaicin.getTransformsUpdated())
+            || options.low_emission_area_lights_disable != optionsNew.low_emission_area_lights_disable
+            || cullLowChanged);
+    bool const deltaLightUpdated =
+        optionsNew.delta_light_enable && (oldLightHash != lightHash || capsaicin.getFrameIndex() == 0);
+    bool const envMapUpdated = optionsNew.environment_light_enable
+                            && (capsaicin.getEnvironmentMapUpdated() || capsaicin.getFrameIndex() == 0);
+    if (deltaLightUpdated || envMapUpdated || areaLightUpdated || lightIndexesChanged)
     {
         lightsUpdated = true;
 
         // Update lights
-        uint32_t lightCount;
         {
             TimedSection const timedSection(*this, "UpdateLights");
 
+            // We create a single light list for all known lights in the current scene. We use `Light` to
+            // represent any type of supported light (area, point, directional etc.) by re-interpreting
+            // the bits stored in each light struct based on the type of light stored. All delta lights
+            // (point/spot/direction) are added to the list directly on the CPU at the beginning of the
+            // list.
             std::vector<Light> allLightData;
 
             // Add the environment map to the light list
             // Note: other parts require that the environment map is always first in the list
-            environmentMapCount = 0;
-            if (!!environmentMap && options.environment_light_enable)
+            if (environmentMapCount != 0)
             {
-                Light light = MakeEnvironmentLight(environmentMap.getWidth(), environmentMap.getHeight());
+                Light const light =
+                    MakeEnvironmentLight(environmentMap.getWidth(), environmentMap.getHeight());
                 allLightData.push_back(light);
-                environmentMapCount = 1;
             }
 
             // Add delta lights to the list
@@ -167,7 +188,7 @@ void LightBuilder::run(CapsaicinInternal &capsaicin) noexcept
                 if (lights[i].type == kGfxLightType_Point)
                 {
                     // Create new point light
-                    Light light = MakePointLight(
+                    Light const light = MakePointLight(
                         lights[i].color * lights[i].intensity, lights[i].position, lights[i].range);
                     allLightData.push_back(light);
                 }
@@ -176,10 +197,10 @@ void LightBuilder::run(CapsaicinInternal &capsaicin) noexcept
             {
                 if (lights[i].type == kGfxLightType_Spot)
                 {
-                    // Create new spot light
-                    Light light = MakeSpotLight(lights[i].color * lights[i].intensity, lights[i].position,
-                        lights[i].range, lights[i].direction, lights[i].outer_cone_angle,
-                        lights[i].inner_cone_angle);
+                    // Create new spotlight
+                    Light const light = MakeSpotLight(lights[i].color * lights[i].intensity,
+                        lights[i].position, lights[i].range, normalize(lights[i].direction),
+                        lights[i].outer_cone_angle, lights[i].inner_cone_angle);
                     allLightData.push_back(light);
                 }
             }
@@ -188,191 +209,240 @@ void LightBuilder::run(CapsaicinInternal &capsaicin) noexcept
                 if (lights[i].type == kGfxLightType_Directional)
                 {
                     // Create new directional light
-                    Light light = MakeDirectionalLight(
-                        lights[i].color * lights[i].intensity, lights[i].direction, lights[i].range);
+                    Light const light = MakeDirectionalLight(lights[i].color * lights[i].intensity,
+                        normalize(lights[i].direction), lights[i].range);
                     allLightData.push_back(light);
                 }
             }
 
-            const uint32_t numLights = areaLightMaxCount + (uint32_t)allLightData.size();
-            if (lightBuffers->getCount() < numLights)
-                for (uint32_t i = 0; i < ARRAYSIZE(lightBuffers); ++i)
+            // Check if meshes were updated and add any area lights to the list
+            if (areaLightCount > 0)
+            {
+                // Create a mapping table that maps each emissive instance into the final light buffer
+                // list. Surfaces are mapped by their instanceID and primitiveID (zero index incrementing
+                // value per triangle in mesh). Since not all instances have emissive meshes and that each
+                // emissive mesh has different primitive counts we need to map (instanceID|primitiveID)
+                // pairs to an ID into the light buffer. The `lightInstanceBuffer` contains a lookup by
+                // instanceID and returns the start offset into the light buffer for that instance. Those
+                // values can then be offset by the primitiveID to get the exact light location. As many
+                // instances are going to contain zero valid emissive meshes the buffer is sparsely
+                // populated.
+                std::vector<uint32_t> lightInstancePrimitiveOffset;
+                areaLightTotal              = 0;
+                areaLightCount              = 0;
+                auto const areaLightStartID = static_cast<uint32_t>(allLightData.size());
+                lightInstancePrimitiveOffset.resize(gfxSceneGetObjectCount<GfxInstance>(scene));
+                for (uint32_t i = 0; i < gfxSceneGetObjectCount<GfxInstance>(scene); ++i)
                 {
-                    char buffer[64];
-                    GFX_SNPRINTF(buffer, sizeof(buffer), "Capsaicin_AllLightBuffer%u", i);
+                    auto const &instance = gfxSceneGetObjects<GfxInstance>(scene)[i];
+                    if (instance.mesh && instance.material && gfxMaterialIsEmissive(*instance.material))
+                    {
+                        auto primitives = static_cast<uint32_t>(instance.mesh->indices.size()) / 3;
 
-                    // Create light buffer
-                    gfxDestroyBuffer(gfx_, lightBuffers[i]);
-
-                    lightBuffers[i] = gfxCreateBuffer<Light>(gfx_, numLights);
-                    lightBuffers[i].setName(buffer);
+                        areaLightTotal += primitives;
+                        if (optionsNew.low_emission_area_lights_disable)
+                        {
+                            // Check base luminance of emissive material
+                            if (luminance(instance.material->emissivity) < optionsNew.low_emission_threshold)
+                            {
+                                continue;
+                            }
+                        }
+                        lightInstancePrimitiveOffset[i] = areaLightCount + areaLightStartID;
+                        areaLightCount += primitives;
+                    }
                 }
+
+                if (!lightInstancePrimitiveOffset.empty())
+                {
+                    // Create light mesh buffer
+                    gfxDestroyBuffer(gfx_, lightInstanceBuffer);
+                    lightInstanceBuffer = gfxCreateBuffer<uint32_t>(gfx_,
+                        static_cast<uint32_t>(lightInstancePrimitiveOffset.size()),
+                        lightInstancePrimitiveOffset.data());
+                    lightInstanceBuffer.setName("LightInstanceBuffer");
+                }
+            }
+
+            uint32_t const lightCount = areaLightCount + static_cast<uint32_t>(allLightData.size());
+            uint32_t const numLights =
+                glm::max(lightCount, 1U); // Always allocate buffers even when no lights
+            if (lightBuffer.getCount() < numLights)
+            {
+                gfxDestroyBuffer(gfx_, lightBuffer);
+                lightBuffer = gfxCreateBuffer<Light>(gfx_, numLights);
+                lightBuffer.setName("AllLightBuffer");
+                if (hasPreviousLightBuffer)
+                {
+                    capsaicin.checkSharedBuffer("PrevLightBuffer", numLights * sizeof(Light), true);
+                }
+            }
+            else if (hasPreviousLightBuffer && !lightIndexesChanged)
+            {
+                // Swap current buffer with previous buffer only if it makes sense to. In the case of light
+                // IDs being invalidated the old buffer contains useless info anyway.
+                // Swapping is faster so just don't look at the constant cast
+                std::swap(lightBuffer, const_cast<GfxBuffer &>(capsaicin.getSharedBuffer("PrevLightBuffer")));
+            }
             if (!allLightData.empty())
             {
                 // Copy delta lights to start of buffer (after any environment maps)
-                GfxBuffer const upload_buffer = gfxCreateBuffer<Light>(
-                    gfx_, (uint32_t)allLightData.size(), allLightData.data(), kGfxCpuAccess_Write);
+                GfxBuffer const upload_buffer = gfxCreateBuffer<Light>(gfx_,
+                    static_cast<uint32_t>(allLightData.size()), allLightData.data(), kGfxCpuAccess_Write);
                 gfxCommandCopyBuffer(
-                    gfx_, lightBuffers[lightBufferIndex], 0, upload_buffer, 0, allLightData.size() * sizeof(Light));
+                    gfx_, lightBuffer, 0, upload_buffer, 0, allLightData.size() * sizeof(Light));
                 gfxDestroyBuffer(gfx_, upload_buffer);
             }
-            lightCount = (uint32_t)allLightData.size();
             gfxCommandClearBuffer(gfx_, lightCountBuffer, lightCount);
         }
 
         // Gather the area lights
-        if (areaLightMaxCount > 0)
+        if (areaLightCount > 0)
         {
+            // The initial delta lights were added top the light list using the CPU but for area lights we
+            // use a GPU shader to write all lights in parallel.
             TimedSection const timedSection(*this, "GatherAreaLights");
 
-            uint32_t const instanceCount    = gfxSceneGetObjectCount<GfxInstance>(scene);
-            uint32_t       drawCommandCount = 0;
-
-            GfxBuffer instanceIDBuffer = capsaicin.allocateConstantBuffer<uint32_t>(instanceCount);
-            uint32_t *instanceIDData   = (uint32_t *)gfxBufferGetData(gfx_, instanceIDBuffer);
-
-            GfxBuffer drawCommandBuffer =
-                capsaicin.allocateConstantBuffer<D3D12_DRAW_INDEXED_ARGUMENTS>(instanceCount);
-            D3D12_DRAW_INDEXED_ARGUMENTS *drawCommands =
-                (D3D12_DRAW_INDEXED_ARGUMENTS *)gfxBufferGetData(gfx_, drawCommandBuffer);
-
-            if (!lightInstancePrimitiveCount.empty())
-            {
-                // Create light mesh buffer
-                gfxDestroyBuffer(gfx_, lightInstanceBuffer);
-                lightInstanceBuffer =
-                    gfxCreateBuffer<uint32_t>(gfx_, static_cast<uint32_t>(lightInstancePrimitiveCount.size()),
-                        lightInstancePrimitiveCount.data());
-                lightInstanceBuffer.setName("Capsaicin_LightInstanceBuffer");
-            }
-            if (lightInstancePrimitiveBuffer.getCount() < areaLightMaxCount)
-            {
-                // Create light mesh primitive buffer
-                gfxDestroyBuffer(gfx_, lightInstancePrimitiveBuffer);
-                lightInstancePrimitiveBuffer = gfxCreateBuffer<uint32_t>(gfx_, areaLightMaxCount);
-                lightInstancePrimitiveBuffer.setName("Capsaicin_LightInstancePrimitiveBuffer");
-            }
-
+            // Create a list of valid instance|meshlet pairs that contain emissive meshlets.
+            std::vector<DrawData> drawData;
+            uint32_t const        instanceCount = gfxSceneGetObjectCount<GfxInstance>(capsaicin.getScene());
             for (uint32_t i = 0; i < instanceCount; ++i)
             {
-                GfxConstRef<GfxInstance> instanceRef = gfxSceneGetObjectHandle<GfxInstance>(scene, i);
-
-                if (!instanceRef->mesh || !instanceRef->material
-                    || !gfxMaterialIsEmissive(*instanceRef->material))
+                if (GfxConstRef const instanceRef = gfxSceneGetObjectHandle<GfxInstance>(scene, i);
+                    instanceRef->mesh && instanceRef->material
+                    && gfxMaterialIsEmissive(*instanceRef->material))
                 {
-                    continue; // not an emissive primitive
+                    if (optionsNew.low_emission_area_lights_disable)
+                    {
+                        if (luminance(instanceRef->material->emissivity) < optionsNew.low_emission_threshold)
+                        {
+                            continue;
+                        }
+                    }
+                    uint32_t const  instanceIndex = capsaicin.getInstanceIdData()[i];
+                    Instance const &instance      = capsaicin.getInstanceData()[instanceIndex];
+                    for (uint32_t j = 0; j < instance.meshlet_count; ++j)
+                    {
+                        drawData.emplace_back(instance.meshlet_offset_idx + j, instanceIndex);
+                    }
                 }
-
-                uint32_t const  drawCommandIndex = drawCommandCount++;
-                uint32_t const  instanceIndex    = (uint32_t)instanceRef;
-                Instance const &instance         = capsaicin.getInstanceData()[instanceIndex];
-                Mesh const     &mesh             = capsaicin.getMeshData()[instance.mesh_index];
-
-                drawCommands[drawCommandIndex].IndexCountPerInstance = mesh.index_count;
-                drawCommands[drawCommandIndex].InstanceCount         = 1;
-                drawCommands[drawCommandIndex].StartIndexLocation    = mesh.index_offset_idx;
-                drawCommands[drawCommandIndex].BaseVertexLocation    = mesh.vertex_offset_idx;
-                drawCommands[drawCommandIndex].StartInstanceLocation = drawCommandIndex;
-
-                instanceIDData[drawCommandIndex] = instanceIndex;
             }
+            auto            drawCount      = static_cast<uint32_t>(drawData.size());
+            GfxBuffer const drawDataBuffer = gfxCreateBuffer<DrawData>(gfx_, drawCount, drawData.data());
 
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_LightBuffer", lightBuffers[lightBufferIndex]);
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_LightBufferSize", lightCountBuffer);
+            // The shader is actually a compute kernel, but it functions identically to a mesh shader. We run
+            // a mesh shader group for each entry in the draw call list. Each shader group is then responsible
+            // for collecting and writing primitives into the light list. A downside of this approach is that
+            // the number of primitives per meshlet may not fully fill our group size which can lead to unused
+            // threads. Attempting to merge meshlets to improve occupancy is outside the scope of what's
+            // required here, and we leave it as an optimisation for the asset writer/processor.
+            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_DrawDataBuffer", drawDataBuffer);
+            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_DrawCount", drawCount);
+            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_LightBuffer", lightBuffer);
             gfxProgramSetParameter(
                 gfx_, gatherAreaLightsProgram, "g_LightInstanceBuffer", lightInstanceBuffer);
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_LightInstancePrimitiveBuffer",
-                lightInstancePrimitiveBuffer);
 
-            gfxProgramSetParameter(
-                gfx_, gatherAreaLightsProgram, "g_InstanceBuffer", capsaicin.getInstanceBuffer());
             gfxProgramSetParameter(
                 gfx_, gatherAreaLightsProgram, "g_MaterialBuffer", capsaicin.getMaterialBuffer());
             gfxProgramSetParameter(
+                gfx_, gatherAreaLightsProgram, "g_VertexBuffer", capsaicin.getVertexBuffer());
+            gfxProgramSetParameter(
+                gfx_, gatherAreaLightsProgram, "g_VertexDataIndex", capsaicin.getVertexDataIndex());
+            gfxProgramSetParameter(
+                gfx_, gatherAreaLightsProgram, "g_MeshletBuffer", capsaicin.getSharedBuffer("Meshlets"));
+            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_MeshletPackBuffer",
+                capsaicin.getSharedBuffer("MeshletPack"));
+            gfxProgramSetParameter(
+                gfx_, gatherAreaLightsProgram, "g_InstanceBuffer", capsaicin.getInstanceBuffer());
+            gfxProgramSetParameter(
                 gfx_, gatherAreaLightsProgram, "g_TransformBuffer", capsaicin.getTransformBuffer());
 
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_InstanceIDBuffer", instanceIDBuffer);
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_TextureMaps", capsaicin.getTextures(),
-                capsaicin.getTextureCount());
-            gfxProgramSetParameter(
-                gfx_, gatherAreaLightsProgram, "g_TextureSampler", capsaicin.getLinearSampler());
-            gfxProgramSetParameter(gfx_, gatherAreaLightsProgram, "g_LightCount", lightCount);
+            // Draw meshlets
+            gfxCommandBindKernel(gfx_, gatherAreaLightsKernel);
+            gfxCommandDispatch(gfx_, drawCount, 1, 1);
 
-            gfxCommandBindKernel(gfx_, countAreaLightsKernel);
-            gfxCommandMultiDrawIndexedIndirect(gfx_, drawCommandBuffer, drawCommandCount);
-            gfxCommandScanSum(
-                gfx_, kGfxDataType_Uint, lightInstancePrimitiveBuffer, lightInstancePrimitiveBuffer);
-            gfxCommandBindKernel(gfx_, scatterAreaLightsKernel);
-            gfxCommandMultiDrawIndexedIndirect(gfx_, drawCommandBuffer, drawCommandCount);
-
-            gfxDestroyBuffer(gfx_, instanceIDBuffer);
-            gfxDestroyBuffer(gfx_, drawCommandBuffer);
-
-            // If we actually have a change in the number of lights then we need to invalidate previous count
-            // history. If all that happened is a change in transforms then we can ignore
-            if (oldAreaLightMaxCount != areaLightMaxCount || capsaicin.getMeshesUpdated())
-            {
-                for (auto &i : lightCountBufferTemp)
-                {
-                    i.first = false;
-                }
-                areaLightCount = areaLightMaxCount;
-            }
-
-            // Begin copy of new value (will take 'bufferIndex' number of frames to become valid)
-            gfxCommandCopyBuffer(gfx_, lightCountBufferTemp[bufferIndex].second, lightCountBuffer);
-            lightCountBufferTemp[bufferIndex].first = true;
+            gfxDestroyBuffer(gfx_, drawDataBuffer);
         }
-        else
+
+        if (hasPreviousLightBuffer && lightIndexesChanged)
         {
-            // Need to invalidate previous count history
-            for (auto &i : lightCountBufferTemp)
-            {
-                i.first = 0;
-            }
-            areaLightCount = 0;
+            // The previous light buffer is unusable, to avoid errors we reset it to match the newly created
+            // one
+            gfxCommandCopyBuffer(gfx_, capsaicin.getSharedBuffer("PrevLightBuffer"), lightBuffer);
         }
     }
-    else
+    else if (hasPreviousLightBuffer && lightsUpdatedBack)
     {
         // Lights haven't changed since last frame, so simply copy the previous light data across.
-        gfxCommandCopyBuffer(gfx_, lightBuffers[lightBufferIndex], lightBuffers[1 - lightBufferIndex]);
+        gfxCommandCopyBuffer(gfx_, capsaicin.getSharedBuffer("PrevLightBuffer"), lightBuffer);
     }
+    lightsUpdatedBack = lightsUpdated;
+    // Check change in settings last so that areaLightCount has a chance to be correctly calculated
+    lightSettingsChanged =
+        oldEnvironmentMapCount != environmentMapCount || (oldAreaLightCount > 0) != (areaLightCount > 0)
+        || (oldDeltaLightCount > 0) != (deltaLightCount > 0)
+        || options.environment_light_cosine_enable != optionsNew.environment_light_cosine_enable;
+    options = optionsNew;
 }
 
 void LightBuilder::terminate() noexcept
 {
-    for (GfxBuffer &lightBuffer : lightBuffers)
-    {
-        gfxDestroyBuffer(gfx_, lightBuffer);
-        lightBuffer = {};
-    }
+    gfxDestroyBuffer(gfx_, lightBuffer);
+    lightBuffer = {};
     gfxDestroyBuffer(gfx_, lightCountBuffer);
     lightCountBuffer = {};
     gfxDestroyBuffer(gfx_, lightInstanceBuffer);
     lightInstanceBuffer = {};
-    gfxDestroyBuffer(gfx_, lightInstancePrimitiveBuffer);
-    lightInstancePrimitiveBuffer = {};
-    for (auto &i : lightCountBufferTemp)
-    {
-        gfxDestroyBuffer(gfx_, i.second);
-        i.second = {};
-    }
-    lightCountBufferTemp.clear();
 
-    gfxDestroyKernel(gfx_, countAreaLightsKernel);
-    countAreaLightsKernel = {};
-    gfxDestroyKernel(gfx_, scatterAreaLightsKernel);
-    scatterAreaLightsKernel = {};
+    gfxDestroyKernel(gfx_, gatherAreaLightsKernel);
+    gatherAreaLightsKernel = {};
     gfxDestroyProgram(gfx_, gatherAreaLightsProgram);
     gatherAreaLightsProgram = {};
 }
 
 void LightBuilder::renderGUI(CapsaicinInternal &capsaicin) const noexcept
 {
-    ImGui::Checkbox("Enable Delta Lights", &capsaicin.getOption<bool>("delta_light_enable"));
+    if (areaLightTotal == 0)
+    {
+        ImGui::BeginDisabled();
+    }
     ImGui::Checkbox("Enable Area Lights", &capsaicin.getOption<bool>("area_light_enable"));
+    ImGui::Checkbox(
+        "Cull Low Emission Area Lights", &capsaicin.getOption<bool>("low_emission_area_lights_disable"));
+    if (capsaicin.getOption<bool>("low_emission_area_lights_disable"))
+    {
+        ImGui::SliderFloat(
+            "Low Emission Threshold", &capsaicin.getOption<float>("low_emission_threshold"), 0.0F, 100.0F);
+    }
+    if (areaLightTotal == 0)
+    {
+        ImGui::EndDisabled();
+    }
+    auto const deltaLightTotal = gfxSceneGetObjectCount<GfxLight>(capsaicin.getScene());
+    if (deltaLightTotal == 0)
+    {
+        ImGui::BeginDisabled();
+    }
+    ImGui::Checkbox("Enable Delta Lights", &capsaicin.getOption<bool>("delta_light_enable"));
+    if (deltaLightTotal == 0)
+    {
+        ImGui::EndDisabled();
+    }
+    bool const environmentMapTotal = !!capsaicin.getEnvironmentBuffer();
+    if (!environmentMapTotal)
+    {
+        ImGui::BeginDisabled();
+    }
     ImGui::Checkbox("Enable Environment Lights", &capsaicin.getOption<bool>("environment_light_enable"));
+    if (environmentMapTotal)
+    {
+        ImGui::Checkbox("Enable Cosine Sampling Environment Lights",
+            &capsaicin.getOption<bool>("environment_light_cosine_enable"));
+    }
+    if (!environmentMapTotal)
+    {
+        ImGui::EndDisabled();
+    }
 }
 
 bool LightBuilder::needsRecompile([[maybe_unused]] CapsaicinInternal const &capsaicin) const noexcept
@@ -384,29 +454,40 @@ std::vector<std::string> LightBuilder::getShaderDefines(
     [[maybe_unused]] CapsaicinInternal const &capsaicin) const noexcept
 {
     std::vector<std::string> baseDefines;
-    if (!options.delta_light_enable)
+    if (deltaLightCount == 0)
     {
-        baseDefines.push_back("DISABLE_DELTA_LIGHTS");
+        baseDefines.emplace_back("DISABLE_DELTA_LIGHTS");
     }
-    if (!options.area_light_enable)
+    if (areaLightCount == 0)
     {
-        baseDefines.push_back("DISABLE_AREA_LIGHTS");
+        baseDefines.emplace_back("DISABLE_AREA_LIGHTS");
     }
-    if (!options.environment_light_enable)
+    if (environmentMapCount == 0)
     {
-        baseDefines.push_back("DISABLE_ENVIRONMENT_LIGHTS");
+        baseDefines.emplace_back("DISABLE_ENVIRONMENT_LIGHTS");
+    }
+    if (options.environment_light_cosine_enable)
+    {
+        baseDefines.emplace_back("ENABLE_COSINE_ENVIRONMENT_SAMPLING");
+    }
+    if (capsaicin.hasSharedBuffer("PrevLightBuffer"))
+    {
+        baseDefines.emplace_back("ENABLE_PREVIOUS_LIGHTS");
     }
     return baseDefines;
 }
 
 void LightBuilder::addProgramParameters(
-    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram program) const noexcept
+    [[maybe_unused]] CapsaicinInternal const &capsaicin, GfxProgram const &program) const noexcept
 {
     gfxProgramSetParameter(gfx_, program, "g_LightBufferSize", lightCountBuffer);
-    gfxProgramSetParameter(gfx_, program, "g_LightBuffer", lightBuffers[lightBufferIndex]);
-    gfxProgramSetParameter(gfx_, program, "g_PrevLightBuffer", lightBuffers[1 - lightBufferIndex]);
+    gfxProgramSetParameter(gfx_, program, "g_LightBuffer", lightBuffer);
+    if (capsaicin.hasSharedBuffer("PrevLightBuffer"))
+    {
+        gfxProgramSetParameter(
+            gfx_, program, "g_PrevLightBuffer", capsaicin.getSharedBuffer("PrevLightBuffer"));
+    }
     gfxProgramSetParameter(gfx_, program, "g_LightInstanceBuffer", lightInstanceBuffer);
-    gfxProgramSetParameter(gfx_, program, "g_LightInstancePrimitiveBuffer", lightInstancePrimitiveBuffer);
 }
 
 uint32_t LightBuilder::getAreaLightCount() const
@@ -431,6 +512,11 @@ bool LightBuilder::getLightsUpdated() const
 
 bool LightBuilder::getLightSettingsUpdated() const
 {
-    return lightSettingChanged;
+    return lightSettingsChanged;
+}
+
+bool LightBuilder::getLightIndexesChanged() const
+{
+    return lightIndexesChanged;
 }
 } // namespace Capsaicin

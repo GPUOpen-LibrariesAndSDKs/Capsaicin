@@ -27,7 +27,7 @@ THE SOFTWARE.
 StructuredBuffer<uint> g_SeedBuffer;
 StructuredBuffer<uint> g_SobolXorsBuffer;
 
-#include "../../math/random.hlsl"
+#include "math/random.hlsl"
 
 namespace NoExport
 {
@@ -160,7 +160,7 @@ class StratifiedSampler
  * Initialise a stratified sample generator.
  * @param seed Seed value to initialise random with (e.g. 1D pixel index).
  * @param frame Temporal seed value to initialise random with (e.g. frame number).
- * @returns The new stratified sampler.
+ * @return The new stratified sampler.
  */
 StratifiedSampler MakeStratifiedSampler(uint seed, uint frame)
 {
@@ -225,7 +225,7 @@ class StratifiedSampler1D
 /**
  * Initialise a 1D sequence stratified sample generator.
  * @param seed Seed value to initialise random with (e.g. 1D pixel index).
- * @returns The 1D new stratified sampler.
+ * @return The 1D new stratified sampler.
  */
 StratifiedSampler1D MakeStratifiedSampler1D(uint seed)
 {
@@ -244,7 +244,7 @@ StratifiedSampler1D MakeStratifiedSampler1D(uint seed)
  *  from within the same dimension.
  * @param strat The dimensional sampler to initialise from.
  * @param offset (Optional) The number of values expected to be taken with this sampler that is used to offset the start index accordingly.
- * @returns The new 1D stratified sampler.
+ * @return The new 1D stratified sampler.
  */
 StratifiedSampler1D MakeStratifiedSampler1D(StratifiedSampler strat, uint offset = 0)
 {
@@ -283,7 +283,7 @@ class StratifiedSampler2D
 /**
  * Initialise a 2D sequence stratified sample generator.
  * @param seed Seed value to initialise random with (e.g. 1D pixel index).
- * @returns The 2D new stratified sampler.
+ * @return The 2D new stratified sampler.
  */
 StratifiedSampler2D MakeStratifiedSampler2D(uint seed)
 {
@@ -302,7 +302,7 @@ StratifiedSampler2D MakeStratifiedSampler2D(uint seed)
  *  from within the same dimension.
  * @param strat The dimensional sampler to initialise from.
  * @param offset (Optional) The number of values expected to be taken with this sampler that is used to offset the start index accordingly.
- * @returns The new 2D stratified sampler.
+ * @return The new 2D stratified sampler.
  */
 StratifiedSampler2D MakeStratifiedSampler2D(StratifiedSampler strat, uint offset = 0)
 {
