@@ -180,6 +180,7 @@ void Bloom::render(CapsaicinInternal &capsaicin) noexcept
         gfxProgramSetParameter(gfx_, blurProgram, "g_Exposure", capsaicin.getSharedBuffer("Exposure"));
         float const bloomClip = 1.0F * options.bloom_clip_bias;
         gfxProgramSetParameter(gfx_, blurProgram, "g_BloomClip", bloomClip);
+        gfxProgramSetParameter(gfx_, blurProgram, "g_RecipBloomClip", 1.0F / bloomClip);
         // Run first pass
         uint32_t           numGroupsX = (blurDimensions.x + FFX_BLUR_TILE_SIZE_X - 1) / FFX_BLUR_TILE_SIZE_X;
         constexpr uint32_t numGroupsY = FFX_BLUR_DISPATCH_Y;
@@ -265,11 +266,11 @@ void Bloom::renderGUI(CapsaicinInternal &capsaicin) const noexcept
         {
             capsaicin.setOption("bloom_radius", static_cast<uint32_t>(bloomRadius));
         }
-        /*float bloomClip = capsaicin.getOption<float>("bloom_clip_bias");
+        float bloomClip = capsaicin.getOption<float>("bloom_clip_bias");
         if (ImGui::DragFloat("Bloom Clip Bias", &bloomClip, 5e-3F, 0.001F, 10.0F))
         {
             capsaicin.setOption("bloom_clip_bias", bloomClip);
-        }*/
+        }
     }
 }
 
