@@ -36,6 +36,7 @@ SamplerState g_LinearClampSampler;
 
 #ifndef PASSTHROUGH
 float g_BloomClip;
+float g_RecipBloomClip;
 StructuredBuffer<float> g_Exposure;
 #endif
 
@@ -95,8 +96,7 @@ FfxFloat32x3 BlurLoadInput(FfxInt32x2 inPxCoord)
     // Only pass through clipped values
     float lum = luminance(color);
     // Clamp colors to prevent overblown bloom
-    float lumaScale = (g_BloomClip) / lum;
-    color *= lum > g_BloomClip ? lumaScale : max(-squared(5.0f * lum - 5.0f) + g_BloomClip, 0.0f);
+    color *= lum > g_BloomClip ? (g_BloomClip / lum) : max(-squared(5.0f * ((lum * g_RecipBloomClip) - 1.0f)) + 1.0f, 0.0f);
 #endif
     return color;
 }
